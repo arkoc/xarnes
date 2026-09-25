@@ -374,9 +374,31 @@ test('draft, retarget, and close/reopen cycles retain a completed review across 
   });
 });
 
+test('baseline PRs survive restart without attempt counts and new commits start at attempt one', async () => {
+  await fixture(`writeFileSync(output,JSON.stringify(result));`, async h => {
+    const path = join(h.dir, 'pr.json');
+    const pr = JSON.parse(await readFile(path, 'utf8'));
+    const entry = { sha: pr.head.sha, baseRef: pr.base.ref, status: 'baseline' };
+    await writeFile(h.statePath, JSON.stringify({ initialized: true, prs: { 1: entry }, statuses: {}, queue: [] }));
+    h.start();
+    await until(async () => (await h.state()).lastPollAt, 'baseline PR observed');
+    await h.stop();
+    assert.deepEqual((await h.state()).prs[1], entry);
+    await assert.rejects(readFile(join(h.dir, 'codex-pid')), { code: 'ENOENT' });
+
+    const updated = { ...pr, head: { sha: 'c'.repeat(40) } };
+    await writeFile(path, JSON.stringify(updated));
+    h.start();
+    await until(async () => (await h.state()).prs[1]?.status === 'succeeded', 'new revision reviewed');
+    await h.stop();
+    assert.equal((await h.state()).prs[1].sha, updated.head.sha);
+    assert.equal((await h.state()).prs[1].attempts, 1);
+  });
+});
+
 test('a crash on the last allowed attempt becomes an error status on restart', async () => {
   await fixture(`throw new Error('Must not execute after the retry budget is spent');`, async h => {
-    await writeFile(h.statePath, JSON.stringify({ initialized: true, prs: { 1: { sha: 'a'.repeat(40), baseRef: 'dev', status: 'running', attempts: 3 } } }));
+    await writeFile(h.statePath, JSON.stringify({ initialized: true, prs: { 1: { sha: 'a'.repeat(40), baseRef: 'dev', status: 'running', attempts: 3 } }, statuses: {}, queue: [] }));
     h.start();
     await until(async () => Object.values((await h.state()).statuses).some(s => s.delivered && s.payload.state === 'error'), 'interrupted terminal attempt reported');
     await h.stop();
@@ -388,7 +410,7 @@ test('a crash on the last allowed attempt becomes an error status on restart', a
 test('an open PR keeps its retry budget while temporarily ineligible', async () => {
   await fixture(`throw new Error('Retry delay has not elapsed');`, async h => {
     const entry = { sha: 'a'.repeat(40), baseRef: 'dev', status: 'failed', attempts: 2, retryAt: new Date(Date.now() + 600000).toISOString() };
-    await writeFile(h.statePath, JSON.stringify({ initialized: true, prs: { 1: entry } }));
+    await writeFile(h.statePath, JSON.stringify({ initialized: true, prs: { 1: entry }, statuses: {}, queue: [] }));
     const path = join(h.dir, 'pr.json');
     const pr = JSON.parse(await readFile(path, 'utf8'));
     await writeFile(path, JSON.stringify({ ...pr, draft: true }));

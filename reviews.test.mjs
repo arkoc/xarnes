@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { parseReview, publishReview, reviewSubmission, pendingPRs } from './agent.mjs';
 
 const sha = 'a'.repeat(40);
+const targets = new Set(['main', 'dev']);
 const marker = '<!-- standalone-agent:00000000-0000-4000-8000-000000000001 -->';
 const report = verdict => ({
   verdict,
@@ -20,7 +21,7 @@ async function savedResult(verdict, fn) {
   try {
     const output = join(dir, 'result.md');
     await writeFile(output, JSON.stringify(report(verdict)));
-    await fn({ sha, marker, output });
+    await fn({ sha, baseRef: 'dev', marker, output });
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
 
@@ -31,7 +32,7 @@ for (const [verdict, event] of [['pass', 'APPROVE'], ['comment', 'COMMENT'], ['b
       const request = async (path, options) => {
         calls.push({ path, options });
         if (path.includes('/reviews?')) return [];
-        if (!options) return { state: 'open', merged: false, head: { sha } };
+        if (!options) return { state: 'open', merged: false, head: { sha }, base: { ref: 'dev' } };
         const body = JSON.parse(options.body);
         assert.equal(options.method, 'POST');
         assert.equal(path, '/repos/example/repo/pulls/42/reviews');
@@ -50,7 +51,7 @@ for (const [verdict, event] of [['pass', 'APPROVE'], ['comment', 'COMMENT'], ['b
         }
         return { id: 17, state: stateFor(event), commit_id: sha, html_url: 'https://github.com/example/repo/pull/42#pullrequestreview-17' };
       };
-      const outcome = await publishReview(request, 'example/repo', 42, entry);
+      const outcome = await publishReview(request, 'example/repo', 42, entry, targets);
       assert.equal(outcome.status, 'succeeded');
       assert.equal(outcome.verdict, verdict);
       assert.equal(outcome.reviewId, 17);
@@ -108,7 +109,7 @@ test('invalid saved output fails before any GitHub request', async () => {
   await savedResult('pass', async entry => {
     await writeFile(entry.output, '{"verdict":"pass"}');
     let calls = 0;
-    await assert.rejects(publishReview(async () => { calls++; }, 'example/repo', 42, entry), /Incomplete/);
+    await assert.rejects(publishReview(async () => { calls++; }, 'example/repo', 42, entry, targets), /Incomplete/);
     assert.equal(calls, 0);
   });
 });
@@ -123,7 +124,7 @@ for (const [name, latest, expected] of [
       const outcome = await publishReview(async (path, options) => {
         assert.equal(options, undefined);
         return path.includes('/reviews?') ? [] : latest;
-      }, 'example/repo', 42, entry);
+      }, 'example/repo', 42, entry, targets);
       assert.equal(outcome.status, expected);
     });
   });
@@ -139,7 +140,7 @@ test('reconciliation paginates reviews and does not repeat a submitted or dismis
         if (path.endsWith('page=1')) return Array.from({ length: 100 }, (_, id) => ({ id, body: 'Unrelated review', commit_id: sha, state: 'COMMENTED' }));
         assert.ok(path.endsWith('page=2'));
         return [{ id: 999, commit_id: sha, body: 'Review\n\n' + marker, state }];
-      }, 'example/repo', 42, entry);
+      }, 'example/repo', 42, entry, targets);
       assert.equal(outcome.reviewId, 999);
       assert.equal(calls, 2);
     });
@@ -151,10 +152,10 @@ test('a marker on another revision does not suppress the current review', async 
     let posts = 0;
     await publishReview(async (path, options) => {
       if (path.includes('/reviews?')) return [{ id: 1, body: marker, commit_id: 'b'.repeat(40), state: 'COMMENTED' }];
-      if (!options) return { state: 'open', head: { sha } };
+      if (!options) return { state: 'open', head: { sha }, base: { ref: 'dev' } };
       posts++;
       return { id: 2, state: 'COMMENTED', commit_id: sha };
-    }, 'example/repo', 42, entry);
+    }, 'example/repo', 42, entry, targets);
     assert.equal(posts, 1);
   });
 });
@@ -163,9 +164,9 @@ test('unconfirmed review responses remain errors for later reconciliation', asyn
   await savedResult('block', async entry => {
     await assert.rejects(publishReview(async (path, options) => {
       if (path.includes('/reviews?')) return [];
-      if (!options) return { state: 'open', head: { sha } };
+      if (!options) return { state: 'open', head: { sha }, base: { ref: 'dev' } };
       return { id: 3, state: 'PENDING', commit_id: sha };
-    }, 'example/repo', 42, entry), /did not confirm/);
+    }, 'example/repo', 42, entry, targets), /did not confirm/);
   });
 });
 
@@ -176,9 +177,9 @@ test('oversized reviews fail without dropping findings', () => {
 });
 
 test('pending review delivery retries even with updates disabled, while a new head starts new work', () => {
-  const state = { initialized: true, prs: { 1: { sha, status: 'review_pending' } } };
-  const same = { number: 1, head: { sha } };
-  const newer = { number: 1, head: { sha: 'b'.repeat(40) } };
+  const state = { initialized: true, prs: { 1: { sha, baseRef: 'dev', status: 'review_pending' } } };
+  const same = { number: 1, head: { sha }, base: { ref: 'dev' } };
+  const newer = { ...same, head: { sha: 'b'.repeat(40) } };
   assert.deepEqual(pendingPRs([same], state, { updates: false }), [same]);
   assert.deepEqual(pendingPRs([newer], state), [newer]);
   assert.deepEqual(pendingPRs([newer], state, { updates: false }), []);
@@ -190,11 +191,10 @@ test('a PR becoming a draft or leaving target branches defers delivery until eli
     { state: 'open', draft: false, head: { sha }, base: { ref: 'feature' } },
   ]) {
     await savedResult('pass', async entry => {
-      entry.baseRef = 'dev';
       const outcome = await publishReview(async (path, options) => {
         assert.equal(options, undefined);
         return path.includes('/reviews?') ? [] : latest;
-      }, 'example/repo', 42, entry, new Set(['main', 'dev']));
+      }, 'example/repo', 42, entry, targets);
       assert.equal(outcome.status, 'review_pending');
     });
   }
@@ -202,11 +202,10 @@ test('a PR becoming a draft or leaving target branches defers delivery until eli
 
 test('retargeting requires a fresh review even without a new head commit', async () => {
   await savedResult('pass', async entry => {
-    entry.baseRef = 'dev';
     const outcome = await publishReview(async (path, options) => {
       assert.equal(options, undefined);
       return path.includes('/reviews?') ? [] : { state: 'open', head: { sha }, base: { ref: 'main' } };
-    }, 'example/repo', 42, entry, new Set(['main', 'dev']));
+    }, 'example/repo', 42, entry, targets);
     assert.equal(outcome.status, 'stale');
     const state = { initialized: true, prs: { 42: { ...entry, status: 'succeeded' } } };
     const changed = { number: 42, head: { sha }, base: { ref: 'main' } };

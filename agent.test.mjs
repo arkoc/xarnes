@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { pendingPRs, eligiblePRs, allPages, prepareReview, repositorySkillPath } from './agent.mjs';
-const pr = (number, sha) => ({ number, head: { sha } });
+const pr = (number, sha) => ({ number, head: { sha }, base: { ref: 'dev' } });
 
 test('only non-draft PRs into a target branch are eligible', () => {
   const targets = new Set(['main', 'dev']);
@@ -21,7 +21,7 @@ test('first scan skips existing PRs unless requested', () => {
   assert.equal(pendingPRs([pr(1, 'a')], state, { existing: true }).length, 1);
 });
 test('new PRs and commits trigger; completed SHAs do not repeat', () => {
-  const state = { initialized: true, prs: { 1: { sha: 'a', status: 'succeeded' }, 2: { sha: 'b', status: 'baseline' } } };
+  const state = { initialized: true, prs: { 1: { sha: 'a', baseRef: 'dev', status: 'succeeded' }, 2: { sha: 'b', baseRef: 'dev', status: 'baseline' } } };
   assert.deepEqual(pendingPRs([pr(1, 'a'), pr(2, 'b'), pr(4, 'd')], state).map(p => p.number), [4]);
   assert.equal(pendingPRs([pr(1, 'new')], state).length, 1);
   assert.equal(pendingPRs([pr(1, 'new')], state, { updates: false }).length, 0);
@@ -29,18 +29,17 @@ test('new PRs and commits trigger; completed SHAs do not repeat', () => {
 test('interrupted and failed runs retry within the attempt budget; failures wait for their backoff', () => {
   const now = Date.parse('2026-01-01T12:00:00Z');
   const state = { initialized: true, prs: {
-    1: { sha: 'a', status: 'running', attempts: 1 },
-    2: { sha: 'b', status: 'running', attempts: 3 },
-    3: { sha: 'c', status: 'failed', attempts: 1, retryAt: '2026-01-01T11:59:00Z' },
-    4: { sha: 'd', status: 'failed', attempts: 1, retryAt: '2026-01-01T12:01:00Z' },
-    5: { sha: 'e', status: 'failed', attempts: 3 },
-    6: { sha: 'f', status: 'failed', attempts: 0 },
-    7: { sha: 'g', status: 'failed' },
+    1: { sha: 'a', baseRef: 'dev', status: 'running', attempts: 1 },
+    2: { sha: 'b', baseRef: 'dev', status: 'running', attempts: 3 },
+    3: { sha: 'c', baseRef: 'dev', status: 'failed', attempts: 1, retryAt: '2026-01-01T11:59:00Z' },
+    4: { sha: 'd', baseRef: 'dev', status: 'failed', attempts: 1, retryAt: '2026-01-01T12:01:00Z' },
+    5: { sha: 'e', baseRef: 'dev', status: 'failed', attempts: 3 },
+    6: { sha: 'f', baseRef: 'dev', status: 'failed', attempts: 0 },
   } };
   const prs = Object.entries(state.prs).map(([number, entry]) => pr(Number(number), entry.sha));
-  assert.deepEqual(pendingPRs(prs, state, { now }).map(p => p.number), [1, 3, 6, 7]);
+  assert.deepEqual(pendingPRs(prs, state, { now }).map(p => p.number), [1, 3, 6]);
   assert.deepEqual(pendingPRs(prs, state, { now, attempts: 1 }).map(p => p.number), [6]);
-  assert.deepEqual(pendingPRs(prs, state, { now: now + 120_000 }).map(p => p.number), [1, 3, 4, 6, 7]);
+  assert.deepEqual(pendingPRs(prs, state, { now: now + 120_000 }).map(p => p.number), [1, 3, 4, 6]);
 });
 test('polling follows every page and propagates errors instead of marking unseen PRs', async () => {
   const calls = [];
@@ -78,23 +77,40 @@ test('a failed sign-in stops the run before any task executes', async () => {
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test('invalid persisted state fails closed without deleting data', async () => {
+test('incomplete persisted state stops before polling or changing saved data', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'standalone-state-test-'));
   try {
     const statePath = join(dir, 'prs-example--repo.json');
-    const source = JSON.stringify({ initialized: true, prs: [] });
-    await writeFile(statePath, source);
     await mkdir(join(dir, 'workspaces'));
     await writeFile(join(dir, 'workspaces', 'retained'), 'keep');
     await mkdir(join(dir, 'codex')); await writeFile(join(dir, 'codex', 'auth.json'), '{}');
-    const result = spawnSync(process.execPath, [fileURLToPath(new URL('./agent.mjs', import.meta.url)), 'watch'], {
-      encoding: 'utf8', timeout: 5000,
-      env: { PATH: process.env.PATH, CODEX_BIN: join(dir, 'no-codex'), DATA_DIR: dir, GITHUB_REPO: 'example/repo', GITHUB_TOKEN: 'fixture-github', SKILL: 'skills/review' },
-    });
-    assert.equal(result.status, 1, result.stderr);
-    assert.match(result.stderr, /Invalid watcher state.*restore a valid backup/);
-    assert.equal(await readFile(statePath, 'utf8'), source);
-    assert.equal(await readFile(join(dir, 'workspaces', 'retained'), 'utf8'), 'keep');
+    const loader = join(dir, 'mock.mjs');
+    await writeFile(loader, `import {writeFileSync} from 'node:fs'; globalThis.fetch=async()=>{writeFileSync(process.env.DATA_DIR+'/polled','yes'); throw Error('Must not poll');};`);
+    const entry = { sha: 'a'.repeat(40), baseRef: 'dev', status: 'failed', attempts: 1 };
+    const state = { initialized: true, prs: { 1: entry }, statuses: {}, queue: [] };
+    const status = { number: 1, sha: entry.sha, baseRef: 'dev', payload: { state: 'pending' }, delivered: false };
+    const invalid = [
+      { ...state, prs: [] },
+      { ...state, statuses: undefined },
+      { ...state, queue: undefined },
+      ...['baseRef', 'attempts'].map(field => ({ ...state, prs: { 1: { ...entry, [field]: undefined } } })),
+      { ...state, prs: { 1: { ...entry, attempts: -1 } } },
+      { ...state, statuses: { [`1:${entry.sha}`]: { ...status, baseRef: undefined } } },
+      { ...state, queue: ['1'] },
+    ];
+    for (const saved of invalid) {
+      const source = JSON.stringify(saved);
+      await writeFile(statePath, source);
+      const result = spawnSync(process.execPath, ['--import', loader, fileURLToPath(new URL('./agent.mjs', import.meta.url)), 'watch'], {
+        encoding: 'utf8', timeout: 5000,
+        env: { PATH: process.env.PATH, CODEX_BIN: join(dir, 'no-codex'), DATA_DIR: dir, GITHUB_REPO: 'example/repo', GITHUB_TOKEN: 'fixture-github', SKILL: 'skills/review' },
+      });
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /Invalid watcher state.*restore a valid backup/);
+      assert.equal(await readFile(statePath, 'utf8'), source);
+      assert.equal(await readFile(join(dir, 'workspaces', 'retained'), 'utf8'), 'keep');
+      await assert.rejects(readFile(join(dir, 'polled')), { code: 'ENOENT' });
+    }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -442,7 +458,7 @@ globalThis.fetch=async(url,options={})=>{
 });
 
 test('closed and stale saved results become pending again once the PR is observed at the same revision', () => {
-  const state = { initialized: true, prs: { 1: { sha: 'a', status: 'closed', output: 'o', marker: 'm' }, 2: { sha: 'b', status: 'stale', output: 'o', marker: 'm' }, 3: { sha: 'c', baseRef: 'dev', status: 'stale' } } };
+  const state = { initialized: true, prs: { 1: { sha: 'a', baseRef: 'dev', status: 'closed', output: 'o', marker: 'm' }, 2: { sha: 'b', baseRef: 'dev', status: 'stale', output: 'o', marker: 'm' }, 3: { sha: 'c', baseRef: 'dev', status: 'stale' } } };
   const prs = [pr(1, 'a'), pr(2, 'b'), { number: 3, head: { sha: 'c' }, base: { ref: 'dev' } }];
   assert.deepEqual(pendingPRs(prs, state, { updates: false }).map(p => p.number), [1, 2, 3]);
 });
@@ -473,7 +489,7 @@ test('a reopened PR receives its saved review without running Codex again', asyn
     const output = join(dir, 'runs', 'saved.md');
     await writeFile(output, JSON.stringify({ verdict: 'block', reasons: ['Unsafe change'], briefing: { summary: 'Blocked.', decisions: [] }, findings: [], coverage: { invariants: [], scan: [], not_reviewed: [] } }));
     const statePath = join(dir, 'prs-example--repo.json');
-    await writeFile(statePath, JSON.stringify({ initialized: true, prs: { 7: { sha, baseRef: 'main', base: sha, skill: 'skills/review', status: 'closed', attempts: 1, verdict: 'block', output, marker } }, statuses: {} }));
+    await writeFile(statePath, JSON.stringify({ initialized: true, prs: { 7: { sha, baseRef: 'main', base: sha, skill: 'skills/review', status: 'closed', attempts: 1, verdict: 'block', output, marker } }, statuses: {}, queue: [] }));
     const loader = join(dir, 'mock.mjs');
     await writeFile(loader, `import {appendFileSync} from 'node:fs';
 const pr={number:7,draft:false,head:{sha:'${sha}'},base:{ref:'main',sha:'${sha}'},state:'open',merged:false,html_url:'u',title:'t',body:''};
@@ -538,7 +554,7 @@ globalThis.fetch=async(url,options={})=>{
  throw Error('Unexpected request '+path);
 };`);
     const runs = join(dir, 'runs-log'), home = join(dir, 'codex');
-    // Saved-login mode: only slots with an auth.json may start.
+    // Slot 1 reuses its saved sign-in; slot 2 signs in before reviews start.
     const env = { PATH: `${bin}:${process.env.PATH}`, HOME: dir, CODEX_HOME: home, DATA_DIR: dir, SKILL: 'skills/review', GITHUB_REPO: 'example/repo', GITHUB_TOKEN: 'fixture-github', RUN_EXISTING: 'true', MAX_CONCURRENCY: '2', MOCK_RUNS: runs, REAL_GIT: realGit, FIXTURE_REPO: fixture.repo, FIXTURE_HEAD: fixture.head, FIXTURE_TARGET: fixture.target };
     await mkdir(home); await writeFile(join(home, 'auth.json'), '{}');
     const statePath = join(dir, 'prs-example--repo.json');

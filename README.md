@@ -106,9 +106,10 @@ The review itself opens with `✅ PASS`, `💬 COMMENT`, or `⛔ BLOCKED`, then 
 confidence, impact, suggested fix, and the quoted code in an expandable block. Reasons that explain a
 verdict without findings stay visible. The reviewed commit is in the footer.
 
-Statuses do not change branch rules. Configure **dismiss stale approvals** and, if the review should
-gate merging, require the status check in the branch ruleset. GitHub does not let a token approve its
-owner's own PRs, so use a dedicated reviewer identity.
+These statuses are informational: their names include the PR number, so they cannot serve as one
+reusable required status check for the branch. To gate merging on reviews, configure required
+approvals and **dismiss stale approvals** in your branch rules. GitHub does not let a token approve
+its owner's own PRs, so use a dedicated reviewer identity.
 
 ## Run it yourself
 
@@ -218,8 +219,10 @@ limit fail rather than truncate.
 
 - **State** lives in `/data/prs-OWNER--REPO.json`: per PR the reviewed head, base, attempt count,
   result path, marker, and delivered review id. Writes are fsynced and atomically renamed. Invalid
-  state stops startup rather than being replaced. Entries for closed PRs are pruned except the
-  review identity, so reopening a PR at the same commit cannot repeat a review.
+  state stops startup rather than being replaced. Saved state must include the queue, commit
+  statuses, each PR's target branch, and an attempt count for every started review; missing fields
+  are rejected without modifying the file. Entries for closed PRs are pruned except the review
+  identity, so reopening a PR at the same commit cannot repeat a review.
 - **Concurrency is one process.** Workers share the process; the state file and GitHub status
   writes are serialized; a PR never has two reviews in flight, so a new head on an active PR waits.
 - **Healthcheck** (`node /app/agent.mjs healthcheck`) is a liveness check: the discovery loop ticked
@@ -259,10 +262,10 @@ publisher and its credentials.
 node --test --test-timeout=120000 agent.test.mjs reviews.test.mjs lifecycle.test.mjs status.test.mjs
 ```
 
-58 tests cover the verdict mapping, review formatting, exactly-once delivery across restarts and
+59 tests cover the verdict mapping, review formatting, delivery reconciliation across restarts and
 lost responses, retries and backoff, concurrency, queue persistence, status transitions, shutdown,
-crash recovery, and first-start sign-in from the logs. They run in a few seconds and touch nothing
-outside a temporary directory.
+crash recovery, state validation, and first-start sign-in from the logs. They use temporary
+directories and mocked services; no network or credentials are needed.
 
 References: [Codex documentation](https://learn.chatgpt.com/docs),
 [skills](https://learn.chatgpt.com/docs/build-skills),

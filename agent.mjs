@@ -16,8 +16,7 @@ const hasText = value => typeof value === 'string' && value.trim().length > 0;
 const isTextArray = value => Array.isArray(value) && value.every(hasText);
 const isCommit = value => typeof value === 'string' && /^[a-f0-9]{40,64}$/.test(value);
 function sameRevision(entry, pr) {
-  // Older state may lack baseRef; retain compatibility with those saved reviews.
-  return entry?.sha === pr.head.sha && (!entry.baseRef || entry.baseRef === pr.base?.ref);
+  return entry?.sha === pr.head.sha && entry.baseRef === pr.base?.ref;
 }
 function clean(text) {
   for (const secret of secrets) if (secret) text = text.split(secret).join('[redacted]');
@@ -92,14 +91,14 @@ export function pendingPRs(prs, state, { existing = false, updates = true, attem
   return prs.filter(pr => {
     const entry = state.prs[pr.number];
     if (!entry) return state.initialized || existing;
-    if (entry.baseRef && entry.baseRef !== pr.base?.ref) return true;
+    if (entry.baseRef !== pr.base?.ref) return true;
     if (entry.sha !== pr.head.sha) return updates;
     // A PR seen again after closing (or retargeting back) still has its saved result; deliver it instead of re-reviewing.
     if (entry.status === 'closed' || entry.status === 'stale') return true;
     if (entry.status === 'review_pending') return !entry.retryAt || Date.parse(entry.retryAt) <= now;
     // An interrupted run (still "running" after a restart) retries at once; a failed one backs off. Both share the attempt budget.
-    if ((entry.attempts ?? 1) >= attempts) return false;
-    return entry.status === 'running' || (entry.status === 'failed' && (entry.retryAt ? Date.parse(entry.retryAt) : 0) <= now);
+    if (entry.attempts >= attempts) return false;
+    return entry.status === 'running' || (entry.status === 'failed' && (!entry.retryAt || Date.parse(entry.retryAt) <= now));
   });
 }
 export function pruneState(state, open, active) {
@@ -242,14 +241,44 @@ export async function publishReview(request, repo, number, entry, targets) {
   const latest = await request(path);
   if (latest.head?.sha !== entry.sha) return { status: 'stale', verdict: result.verdict };
   if (latest.state !== 'open' || latest.merged) return { status: 'closed', verdict: result.verdict };
-  if (latest.draft || (targets && !targets.has(latest.base?.ref))) return { status: 'review_pending', verdict: result.verdict };
-  if (entry.baseRef && latest.base?.ref !== entry.baseRef) return { status: 'stale', verdict: result.verdict };
+  if (latest.draft || !targets.has(latest.base?.ref)) return { status: 'review_pending', verdict: result.verdict };
+  if (latest.base?.ref !== entry.baseRef) return { status: 'stale', verdict: result.verdict };
   if (stopping) throw new Error('Agent is stopping; review delivery deferred');
   const review = await request(`${path}/reviews`, { method: 'POST', body: JSON.stringify(submission) });
   if (!Number.isSafeInteger(review?.id) || review.commit_id !== entry.sha || review.state !== expectedState) {
     throw new Error('GitHub did not confirm the submitted review; will reconcile on the next scan');
   }
   return { status: 'succeeded', verdict: result.verdict, reviewId: review.id, reviewUrl: review.html_url };
+}
+async function loadState(path) {
+  let state;
+  try { state = JSON.parse(await readFile(path, 'utf8')); }
+  catch (error) {
+    if (error.code === 'ENOENT') return { initialized: false, prs: {}, statuses: {}, queue: [] };
+    throw error;
+  }
+  const invalid = detail => { throw new Error(`Invalid watcher state in ${path}: ${detail}; restore a valid backup before restarting`); };
+  if (!isObject(state) || typeof state.initialized !== 'boolean' || !isObject(state.prs) ||
+      !isObject(state.statuses) || !Array.isArray(state.queue)) {
+    invalid('expected initialized, prs, statuses, and queue');
+  }
+  for (const [number, entry] of Object.entries(state.prs)) {
+    if (!isObject(entry) || !isCommit(entry.sha) || !hasText(entry.baseRef) ||
+        !['baseline', 'running', 'failed', 'review_pending', 'succeeded', 'closed', 'stale'].includes(entry.status)) {
+      invalid(`PR #${number} requires a commit, target branch, and known status`);
+    }
+    if (entry.status !== 'baseline' && (!Number.isSafeInteger(entry.attempts) || entry.attempts < 0)) {
+      invalid(`PR #${number} requires a non-negative attempt count`);
+    }
+  }
+  for (const [key, status] of Object.entries(state.statuses)) {
+    if (!isObject(status) || !isCommit(status.sha) || !hasText(status.baseRef) || !isObject(status.payload) ||
+        !Number.isSafeInteger(status.number) || status.number < 1 || typeof status.delivered !== 'boolean') {
+      invalid(`commit status ${key} is incomplete`);
+    }
+  }
+  if (!state.queue.every(number => Number.isSafeInteger(number) && number > 0)) invalid('queue must contain PR numbers');
+  return state;
 }
 let stateWrites = Promise.resolve();
 function save(path, value) {
@@ -407,15 +436,7 @@ async function main() {
   if (!statusContext || statusContext.length > 200) throw new Error('STATUS_CONTEXT must be a check name of at most 200 characters, e.g. layerswap/security-agent');
   const request = (path, options) => github(githubToken, path, options);
   const statePath = join(data, `prs-${repo.replace('/', '--')}.json`);
-  let state;
-  try { state = JSON.parse(await readFile(statePath, 'utf8')); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; state = { initialized: false, prs: {} }; }
-  if (!isObject(state) || typeof state.initialized !== 'boolean' || !isObject(state.prs) ||
-      (state.statuses !== undefined && !isObject(state.statuses)) || (state.queue !== undefined && !Array.isArray(state.queue))) {
-    throw new Error(`Invalid watcher state in ${statePath}; restore a valid backup before restarting`);
-  }
-  state.statuses ??= {};
-  state.queue ??= [];
+  const state = await loadState(statePath);
   // Only disposable checkouts live here. The volume lock guarantees one owner during recovery.
   const workRoot = join(data, 'workspaces');
   await rm(workRoot, { recursive: true, force: true });
@@ -431,10 +452,10 @@ async function main() {
     const latest = observed.get(Number(number));
     const previous = state.statuses[key];
     // An old run must not overwrite the queued status for a retargeted PR on the same SHA.
-    if (latest?.head.sha === entry.sha && entry.baseRef && latest.base.ref !== entry.baseRef && previous?.baseRef === latest.base.ref) return;
+    if (latest?.head.sha === entry.sha && latest.base.ref !== entry.baseRef && previous?.baseRef === latest.base.ref) return;
     if (['queued', 'running', 'review_pending', 'failed'].includes(entry.status)) {
       if (!latest) entry = { ...entry, status: 'closed' };
-      else if (latest.head.sha !== entry.sha || (entry.baseRef && latest.base.ref !== entry.baseRef)) entry = { ...entry, status: 'stale' };
+      else if (!sameRevision(entry, latest)) entry = { ...entry, status: 'stale' };
     }
     const payload = commitStatus(repo, number, entry, maxAttempts, statusContext);
     if (!payload) return;
@@ -499,7 +520,7 @@ async function main() {
       await save(statePath, state);
     }
     if (same && previous.status === 'review_pending') return finishReview(pr.number);
-    const attempt = same ? (previous.attempts ?? 1) + 1 : 1;
+    const attempt = same ? previous.attempts + 1 : 1;
     const label = `#${pr.number}`;
     // Record the attempt before executing; publication has a separate persisted retry state.
     state.prs[pr.number] = { sha: pr.head.sha, baseRef: pr.base.ref, status: 'running', attempts: attempt };
