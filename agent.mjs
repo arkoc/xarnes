@@ -32,20 +32,25 @@ function command(bin, args, options = {}) {
     const prefix = options.label ? `[${options.label}] ` : '';
     let stdout = '';
     let timedOut = false;
+    let detected = false; // options.detect matched a line; reported on failure so the caller can classify it
     const timer = setTimeout(() => { timedOut = true; terminate(proc, 'SIGKILL'); }, options.timeout ?? 30 * 60_000);
     proc.on('error', (error) => { clearTimeout(timer); fail(error); });
     if (!options.interactive) {
       for (const stream of [proc.stdout, proc.stderr]) {
         stream.setEncoding('utf8');
         if (options.capture && stream === proc.stdout) stream.on('data', part => { stdout += part; });
-        else createInterface({ input: stream, crlfDelay: Infinity }).on('line', line => console.log(prefix + clean(line)));
+        else createInterface({ input: stream, crlfDelay: Infinity }).on('line', line => {
+          if (options.detect?.test(line)) detected = true;
+          console.log(prefix + clean(line));
+        });
       }
       proc.stdin.on('error', () => {});
       proc.stdin.end(options.input ?? '');
     }
     proc.on('close', (code) => {
       clearTimeout(timer); children.delete(proc);
-      code === 0 ? done(stdout.trim()) : fail(new Error(`${bin} ${timedOut ? 'timed out' : `exited with ${code}`}`));
+      if (code === 0) return done(stdout.trim());
+      fail(Object.assign(new Error(`${bin} ${timedOut ? 'timed out' : `exited with ${code}`}`), { detected }));
     });
   });
 }
@@ -80,6 +85,8 @@ export function pendingPRs(prs, state, { existing = false, updates = true, attem
     // A PR seen again after closing (or retargeting back) still has its saved result; deliver it instead of re-reviewing.
     if (entry.status === 'closed' || entry.status === 'stale') return true;
     if (entry.status === 'review_pending') return !entry.retryAt || Date.parse(entry.retryAt) <= now;
+    // A run stopped by the Codex usage limit is not the PR's fault: it retries after the pause and keeps its attempt budget.
+    if (entry.status === 'limited') return !entry.retryAt || Date.parse(entry.retryAt) <= now;
     // An interrupted run (still "running" after a restart) retries at once; a failed one backs off. Both share the attempt budget.
     if (entry.attempts >= attempts) return false;
     return entry.status === 'running' || (entry.status === 'failed' && (!entry.retryAt || Date.parse(entry.retryAt) <= now));
@@ -102,6 +109,7 @@ export function commitStatus(repo, number, entry, maxAttempts, context) {
     case 'queued': description = 'Queued for review'; break;
     case 'running': description = `Review running (attempt ${entry.attempts}/${maxAttempts})`; break;
     case 'review_pending': description = 'Review finished; posting the result'; break;
+    case 'limited': description = 'Codex usage limit reached; review will retry automatically'; break;
     case 'failed':
       state = entry.attempts >= maxAttempts ? 'error' : 'pending';
       description = state === 'error' ? 'Review failed; retry limit reached, operator action needed' : 'Review failed; retry scheduled';
@@ -182,7 +190,7 @@ async function loadState(path) {
   }
   for (const [number, entry] of Object.entries(state.prs)) {
     if (!isObject(entry) || !isCommit(entry.sha) || !hasText(entry.baseRef) ||
-        !['baseline', 'running', 'failed', 'review_pending', 'succeeded', 'closed', 'stale'].includes(entry.status)) {
+        !['baseline', 'running', 'limited', 'failed', 'review_pending', 'succeeded', 'closed', 'stale'].includes(entry.status)) {
       invalid(`PR #${number} requires a commit, target branch, and known status`);
     }
     if (entry.status !== 'baseline' && (!Number.isSafeInteger(entry.attempts) || entry.attempts < 0)) {
@@ -228,6 +236,9 @@ export async function prepareReview(workspace, baseline, target, head, selected,
   if (!(await readFile(manifest, 'utf8')).trim()) throw new Error(`Empty skill at BASE: ${skillPath}/SKILL.md`);
   return { base, manifest };
 }
+// Codex prints this and exits non-zero when the ChatGPT plan's usage window is exhausted.
+const usageLimit = /hit your usage limit/i;
+const usageLimitPause = 15 * 60_000;
 async function execute(instructions, workspace, output, mode, home, label) {
   const sandbox = env.SANDBOX ?? (mode === 'watch' ? 'read-only' : 'workspace-write');
   if (!['container', 'read-only', 'workspace-write'].includes(sandbox)) throw new Error('SANDBOX must be container, read-only or workspace-write');
@@ -245,7 +256,7 @@ async function execute(instructions, workspace, output, mode, home, label) {
     for (const key of ['GITHUB_TOKEN', 'GITHUB_TOKEN_FILE', 'GH_TOKEN', 'GH_TOKEN_FILE', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) delete childEnv[key];
   }
   args.push('-');
-  await command(codex, args, { input: instructions, timeout: Number(env.TASK_TIMEOUT_SECONDS ?? 1800) * 1000, env: childEnv, label });
+  await command(codex, args, { input: instructions, timeout: Number(env.TASK_TIMEOUT_SECONDS ?? 1800) * 1000, env: childEnv, label, detect: usageLimit });
   const result = clean(await readFile(output, 'utf8'));
   await writeFile(output, result, { mode: 0o600, flush: true });
   return result;
@@ -335,6 +346,7 @@ async function main() {
   const active = new Map();
   const freeSlots = [...slots];
   let completed = 0;
+  let pausedUntil = 0; // set when Codex reports its usage limit; no review starts before it passes
   // A run left "running" in the saved state was interrupted; it retries at once within its attempt budget.
   for (const entry of Object.values(state.prs)) if (entry.status === 'running') entry.status = 'failed';
   function recordStatus(number, entry) {
@@ -343,7 +355,7 @@ async function main() {
     const previous = state.statuses[key];
     // An old run must not overwrite the queued status for a retargeted PR on the same SHA.
     if (latest?.head.sha === entry.sha && latest.base.ref !== entry.baseRef && previous?.baseRef === latest.base.ref) return;
-    if (['queued', 'running', 'review_pending', 'failed'].includes(entry.status)) {
+    if (['queued', 'running', 'review_pending', 'limited', 'failed'].includes(entry.status)) {
       if (!latest) entry = { ...entry, status: 'closed' };
       else if (!sameRevision(entry, latest)) entry = { ...entry, status: 'stale' };
     }
@@ -447,6 +459,12 @@ async function main() {
       const entry = { sha: pr.head.sha, baseRef: pr.base.ref, status: 'failed', attempts: attempt, error: clean(error.message) };
       let outcome = 'giving up';
       if (stopping) { entry.attempts = attempt - 1; outcome = 'retrying after restart'; } // A shutdown is not the run's fault.
+      else if (error.detected) {
+        // Nor is the usage limit: keep the attempt, pause every slot, and say so on the PR instead of retrying.
+        pausedUntil = Date.now() + usageLimitPause;
+        Object.assign(entry, { status: 'limited', attempts: attempt - 1, retryAt: new Date(pausedUntil).toISOString() });
+        outcome = `Codex usage limit reached; reviews paused until ${entry.retryAt}`;
+      }
       else if (attempt < maxAttempts) { entry.retryAt = new Date(Date.now() + Math.min(60 * 60_000, 5 * 60_000 * 2 ** (attempt - 1))).toISOString(); outcome = `retrying after ${entry.retryAt}`; }
       state.prs[pr.number] = entry;
       console.error(clean(`PR ${label} failed (attempt ${attempt}/${maxAttempts}): ${error.message}; ${outcome}`));
@@ -490,7 +508,7 @@ async function main() {
       pruneState(state, new Set(open.map(pr => pr.number)), active);
       // Build the queue after status delivery so workers that finished meanwhile are reflected.
       refreshQueue(prs);
-      while (!stopping && freeSlots.length && state.queue.length) {
+      while (!stopping && Date.now() >= pausedUntil && freeSlots.length && state.queue.length) {
         const number = state.queue.shift();
         const slot = freeSlots.shift();
         const promise = review(observed.get(number), slot)

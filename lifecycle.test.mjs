@@ -206,6 +206,39 @@ if(!existsSync(process.env.DATA_DIR+'/interrupted')) {
   });
 });
 
+test('a Codex usage limit pauses reviews, keeps the attempt budget, and says so on the commit status', async () => {
+  await fixture(`
+appendFileSync(process.env.DATA_DIR+'/executions','run\\n');
+if(!existsSync(process.env.DATA_DIR+'/release')) {
+ console.error('ERROR: You\u2019ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 10:00 PM.');
+ process.exit(1);
+}
+writeFileSync(output,JSON.stringify(result));
+`, async h => {
+    h.start();
+    await until(async () => (await h.state()).prs[1]?.status === 'limited', 'usage limit recorded');
+    await pause(1500);
+    const limited = (await h.state()).prs[1];
+    assert.equal(limited.attempts, 0, 'the limit must not spend the retry budget');
+    assert.ok(Date.parse(limited.retryAt) > Date.now() + 10 * 60_000, 'reviews pause for the cooldown');
+    assert.equal((await readFile(join(h.dir, 'executions'), 'utf8')).trim().split('\n').length, 1, 'no retry while paused');
+    const posted = JSON.parse(await readFile(join(h.dir, 'commit-statuses'), 'utf8'));
+    assert.equal(posted.at(-1).state, 'pending');
+    assert.match(posted.at(-1).description, /usage limit reached/);
+    assert.match(h.logs(), /Codex usage limit reached; reviews paused until/);
+    await h.stop();
+    // Once the window resets, the same PR is reviewed on what is still its first attempt.
+    const saved = await h.state(); saved.prs[1].retryAt = new Date(0).toISOString();
+    await writeFile(h.statePath, JSON.stringify(saved));
+    await writeFile(join(h.dir, 'release'), 'yes');
+    h.start();
+    await until(async () => (await h.state()).prs[1]?.status === 'succeeded', 'review completes after the limit resets');
+    await h.stop();
+    assert.equal((await h.state()).prs[1].attempts, 1);
+    assert.equal((await readFile(join(h.dir, 'executions'), 'utf8')).trim().split('\n').length, 2);
+  }, { FAST_POLL: 'true' });
+});
+
 test('task timeout kills descendants and records a retryable failure', async () => {
   await fixture(`
 spawn(process.execPath,['-e',"setInterval(()=>{},1000)"],{stdio:['ignore',1,2]});

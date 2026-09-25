@@ -120,6 +120,7 @@ publishes it as a GitHub commit status and updates it automatically as the revie
 | Result `comment` | ✅ Success: Review complete with non-blocking comments | Posts the review report with comments, without approval |
 | Result `block` | ❌ Failure: Review blocked; changes requested | Requests changes and posts the review report with blocking findings |
 | Retry scheduled | 🟡 Pending: Review failed; retry scheduled | No final result yet |
+| Codex usage limit reached | 🟡 Pending: Codex usage limit reached; review will retry automatically | Not an attempt; reviews pause 15 minutes, then resume |
 | Retry budget exhausted | ⚠️ Error: operator action needed | Delivery has not completed |
 | Superseded revision or closed PR | ⚠️ Error: superseded or cancelled | No new review posted for the ineligible revision |
 
@@ -273,6 +274,10 @@ below this limit.
   writes are serialized; a PR never has two reviews in flight, so a new head on an active PR waits.
 - **Status delivery** posts directly to GitHub. Retrying after a lost response may add an identical
   entry to the commit's status history. Review delivery still checks its marker to avoid duplicate reviews.
+- **Codex usage limit.** When Codex exits with "You've hit your usage limit", the run is not counted
+  against `MAX_ATTEMPTS`: the PR's status says the limit was reached, every slot pauses for 15
+  minutes, and the same attempt is retried when the pause ends. Nothing is escalated to an operator
+  for a limit that resets on its own.
 - **Healthcheck** (`node /app/agent.mjs healthcheck`) is a liveness check: the discovery loop ticked
   within `max(2 min, 3 × POLL_SECONDS)`. A failing GitHub scan logs `Poll failed` but is not
   "unhealthy", because a restart would not fix it.

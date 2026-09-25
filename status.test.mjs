@@ -8,6 +8,7 @@ test('commit status exposes progress, non-blocking comments, failures, and cance
     [{ status: 'queued' }, 'pending'],
     [{ status: 'running', attempts: 1 }, 'pending'],
     [{ status: 'review_pending' }, 'pending'],
+    [{ status: 'limited', attempts: 0 }, 'pending'],
     [{ status: 'failed', attempts: 1 }, 'pending'],
     [{ status: 'failed', attempts: 3 }, 'error'],
     [{ status: 'succeeded', verdict: 'pass' }, 'success'],
@@ -18,7 +19,7 @@ test('commit status exposes progress, non-blocking comments, failures, and cance
   ]) {
     const result = commitStatus('example/repo', 1, entry, 3, 'review');
     assert.equal(result.state, expected);
-    if (expected === 'pending') assert.match(result.description, { queued: /^Queued for review$/, running: /running \(attempt 1\/3\)/, review_pending: /finished; posting/, failed: /retry scheduled/ }[entry.status]);
+    if (expected === 'pending') assert.match(result.description, { queued: /^Queued for review$/, running: /running \(attempt 1\/3\)/, review_pending: /finished; posting/, limited: /usage limit reached/, failed: /retry scheduled/ }[entry.status]);
     assert.ok(result.description.length <= 140);
     assert.equal(result.target_url, 'https://github.com/example/repo/pull/1');
   }
