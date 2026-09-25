@@ -26,9 +26,9 @@ services:
       # service's Environment page. MODEL and FAST_MODE match agent.env.example;
       # the other values match the runner's defaults.
       - key: TARGET_BRANCHES
-        value: main
+        value: main,dev
       - key: MAX_CONCURRENCY
-        value: "1"
+        value: "3"
       - key: MAX_ATTEMPTS
         value: "3"
       - key: POLL_SECONDS
@@ -38,9 +38,9 @@ services:
       - key: WATCH_UPDATES
         value: "true"
       - key: MODEL
-        value: gpt-6-astra
+        value: gpt-5.6-sol
       - key: FAST_MODE
-        value: "true"
+        value: "false"
       - key: TASK_TIMEOUT_SECONDS
         value: "1800"
 
