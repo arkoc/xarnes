@@ -11,17 +11,48 @@ services:
       mountPath: /data
       sizeGB: 10
     envVars:
+      # Required: Render prompts for these when creating the Blueprint.
       - key: GITHUB_REPO
         sync: false
       - key: SKILL
         sync: false
       - key: GITHUB_TOKEN
         sync: false
+
+      # Optional watcher settings: applied automatically and shown on the
+      # service's Environment page. MODEL and FAST_MODE match agent.env.example;
+      # the other values match the runner's defaults.
       - key: TARGET_BRANCHES
         value: main,dev
       - key: STATUS_CONTEXT
         value: review
       - key: MAX_CONCURRENCY
         value: "1"
+      - key: MAX_ATTEMPTS
+        value: "3"
+      - key: POLL_SECONDS
+        value: "15"
       - key: RUN_EXISTING
         value: "false"
+      - key: WATCH_UPDATES
+        value: "true"
+      - key: MODEL
+        value: gpt-6-astra
+      - key: FAST_MODE
+        value: "true"
+      - key: TASK_TIMEOUT_SECONDS
+        value: "1800"
+
+      # Advanced watcher settings. Keep persistent paths on the /data disk.
+      - key: SANDBOX
+        value: container
+      - key: ALLOW_NETWORK
+        value: "false"
+      - key: DATA_DIR
+        value: /data
+      - key: CODEX_HOME
+        value: /data/codex
+      - key: CODEX_BIN
+        value: codex
+      - key: GITHUB_TOKEN_FILE
+        value: ""

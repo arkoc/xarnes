@@ -30,13 +30,39 @@ builds the Dockerfile and starts the watcher with persistent storage.
 
 ## Deploy to Render
 
-Click **Deploy to Render** and provide these three environment values:
+Click **Deploy to Render** and provide the three required environment values:
 
 | Field | Value |
 |---|---|
-| Repository | `owner/name` of the repository to watch |
-| Skill | Directory in that repository holding `SKILL.md`, for example `skills/review` |
-| GitHub token | Fine-grained token with **Contents: read**, **Pull requests: write**, **Commit statuses: write** |
+| `GITHUB_REPO` | `owner/name` of the repository to watch |
+| `SKILL` | Directory in that repository holding `SKILL.md`, for example `skills/review` |
+| `GITHUB_TOKEN` | Fine-grained token with **Contents: read**, **Pull requests: write**, **Commit statuses: write** |
+
+All optional watcher settings are declared in [render.yaml](render.yaml) and applied automatically.
+Open your service's **Environment** page to see all 19 settings, including these defaults:
+
+| Optional setting | Render default |
+|---|---|
+| `TARGET_BRANCHES` | `main,dev` |
+| `STATUS_CONTEXT` | `review` |
+| `MAX_CONCURRENCY` | `1` |
+| `MAX_ATTEMPTS` | `3` |
+| `POLL_SECONDS` | `15` |
+| `RUN_EXISTING` | `false` |
+| `WATCH_UPDATES` | `true` |
+| `MODEL` | `gpt-6-astra` |
+| `FAST_MODE` | `true` |
+| `TASK_TIMEOUT_SECONDS` | `1800` |
+| `SANDBOX` | `container` |
+| `ALLOW_NETWORK` | `false` |
+| `DATA_DIR` | `/data` |
+| `CODEX_HOME` | `/data/codex` |
+| `CODEX_BIN` | `codex` |
+| `GITHUB_TOKEN_FILE` | empty (use `GITHUB_TOKEN`) |
+
+Render's creation form prompts only for the three required values. To change optional settings
+permanently, edit your fork's `render.yaml`: a later Blueprint sync can overwrite changes made on
+the Environment page. Settings used only by local task mode are listed under Configuration below.
 
 Codex uses your ChatGPT account. On first start the container prints a sign-in link and code in
 its logs; open the link, enter the code, and the agent starts watching. No shell access is needed.
@@ -153,6 +179,8 @@ Task mode accepts `INSTRUCTIONS` or `INSTRUCTIONS_FILE` instead of a skill (see
 ## Configuration
 
 Everything is an environment variable. `agent.env.example` is a commented starting point.
+The table lists the runner's defaults when variables are absent. The Render blueprint and local
+example explicitly select `gpt-6-astra` with `FAST_MODE=true`.
 
 | Variable | Default | Purpose |
 |---|---|---|
