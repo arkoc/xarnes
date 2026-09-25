@@ -22,7 +22,7 @@ PR. Your skill chooses the checks, verdict, and complete review body. The runner
 
 ## Deploy to Render
 
-Click **Deploy to Render** and provide the four required environment values:
+Click **Deploy to Render** and provide the five required environment values:
 
 | Field | Value |
 |---|---|
@@ -30,20 +30,20 @@ Click **Deploy to Render** and provide the four required environment values:
 | `SKILL` | Directory in that repository holding `SKILL.md`, for example `skills/review` |
 | `GITHUB_TOKEN` | Fine-grained token with **Contents: read**, **Pull requests: write**, **Commit statuses: write** |
 | `STATUS_CONTEXT` | Review/check name, for example `security-review`. GitHub displays `security-review/pr-123` for PR #123 |
+| `MAX_CONCURRENCY` | `1` to start. Each extra slot needs its own Codex sign-in on this service's disk, so it is set per service and never overwritten by a Blueprint sync |
 
 All optional watcher settings are declared in [render.yaml](render.yaml) and applied automatically.
 Open your service's **Environment** page to see all 18 settings, including these defaults:
 
 | Optional setting | Render default |
 |---|---|
-| `TARGET_BRANCHES` | `main` |
-| `MAX_CONCURRENCY` | `1` |
+| `TARGET_BRANCHES` | `main,dev` |
 | `MAX_ATTEMPTS` | `3` |
 | `POLL_SECONDS` | `15` |
 | `RUN_EXISTING` | `false` |
 | `WATCH_UPDATES` | `true` |
-| `MODEL` | `gpt-6-astra` |
-| `FAST_MODE` | `true` |
+| `MODEL` | `gpt-6-sol` |
+| `FAST_MODE` | `false` |
 | `TASK_TIMEOUT_SECONDS` | `1800` |
 | `SANDBOX` | `container` |
 | `ALLOW_NETWORK` | `false` |
@@ -51,7 +51,7 @@ Open your service's **Environment** page to see all 18 settings, including these
 | `CODEX_HOME` | `/data/codex` |
 | `CODEX_BIN` | `codex` |
 
-Render's creation form prompts only for the four required values. To change optional settings
+Render's creation form prompts only for the five required values. To change optional settings
 permanently, edit your fork's `render.yaml`: a later Blueprint sync can overwrite changes made on
 the Environment page. Settings used only by local task mode are listed under Configuration below.
 
