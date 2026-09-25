@@ -304,7 +304,7 @@ publisher and its credentials.
 | [`Dockerfile`](Dockerfile) | Node + Git + Codex CLI, non-root, `tini` + `flock` entrypoint |
 | [`agent.env.example`](agent.env.example) | Commented configuration template |
 | [`render.yaml`](render.yaml) | Deploy to Render blueprint |
-| [`.github/workflows/publish.yml`](.github/workflows/publish.yml) | Builds and publishes the image to GHCR |
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Runs tests and builds the Docker image locally in CI; does not publish or deploy |
 | `*.test.mjs` | Tests: local Git fixtures, a fake Codex, a mocked GitHub API. No network, no credentials |
 
 ## Tests

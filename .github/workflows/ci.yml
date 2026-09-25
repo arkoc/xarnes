@@ -1,0 +1,20 @@
+name: Build and test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Run tests
+        run: node --test --test-timeout=120000 agent.test.mjs reviews.test.mjs lifecycle.test.mjs status.test.mjs
+      - name: Build Docker image
+        run: docker build -t xarnes-agent:ci .
