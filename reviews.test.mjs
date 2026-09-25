@@ -75,9 +75,19 @@ test('invalid JSON, unknown verdicts, and missing or blank bodies never publish'
   assert.deepEqual(parseReview(' \n' + JSON.stringify(report('comment')) + '\n'), report('comment'));
 });
 
-test('review bodies retain credential redaction without adding presentation', () => {
-  const result = { verdict: 'comment', body: 'Credential: ghp_' + 'x'.repeat(36) };
-  assert.equal(reviewSubmission(result, sha, marker).body, 'Credential: [redacted]\n\n' + marker);
+test('review bodies redact only the configured GitHub token', () => {
+  const previous = process.env.GITHUB_TOKEN;
+  try {
+    process.env.GITHUB_TOKEN = 'configured-test-token';
+    const example = 'ghp_' + 'x'.repeat(36);
+    const result = { verdict: 'comment', body: `Credential: configured-test-token; example: ${example}` };
+    assert.equal(reviewSubmission(result, sha, marker).body, `Credential: [redacted]; example: ${example}\n\n${marker}`);
+    delete process.env.GITHUB_TOKEN;
+    assert.equal(reviewSubmission(result, sha, marker).body, `${result.body}\n\n${marker}`);
+  } finally {
+    if (previous === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = previous;
+  }
 });
 
 test('invalid saved output fails before any GitHub request', async () => {

@@ -365,7 +365,7 @@ test('repository skill selection rejects absolute paths and traversal', () => {
   }
 });
 
-test('missing skills at BASE and symlinked resources fail instead of using HEAD', async () => {
+test('missing skills at BASE fail; trusted symlinked resources are allowed', async () => {
   const dir=await mkdtemp(join(tmpdir(),'xarnes-base-test-'));
   try {
     const fixture=await fixtureRepository(dir);
@@ -374,7 +374,9 @@ test('missing skills at BASE and symlinked resources fail instead of using HEAD'
     await symlink('../SKILL.md',join(fixture.repo,'skills/review/references/link'));
     fixture.git('add','.'); fixture.git('commit','-qm','Symlink fixture');
     const linked=fixture.git('rev-parse','HEAD');
-    await assert.rejects(prepareReview(fixture.repo,join(dir,'linked'),linked,linked,'skills/review'),/must not be symlinks/);
+    const prepared = await prepareReview(fixture.repo,join(dir,'linked'),linked,linked,'skills/review');
+    assert.equal(prepared.base, linked);
+    assert.equal(await readFile(join(dir,'linked','skills/review/references/link'),'utf8'), await readFile(prepared.manifest,'utf8'));
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
 

@@ -30,27 +30,20 @@ test('commit status exposes progress, non-blocking comments, failures, and cance
   assert.equal(commitStatus('example/repo', 7, entry, 3, 'team/security-review').context, 'team/security-review/pr-7');
 });
 
-test('status reconciles a lost response, follows pagination, and only trusts the newest matching context', async () => {
+test('status posts directly and retries after a lost response', async () => {
   const payload = commitStatus('example/repo', 1, { status: 'succeeded', verdict: 'pass' }, 3, 'review');
-  let stored = [], posts = 0;
+  const stored = [];
   const request = async (path, options) => {
-    if (options?.method === 'POST') {
-      assert.equal(path, `/repos/example/repo/statuses/${sha}`);
-      posts++;
-      stored.unshift({ id: posts, ...JSON.parse(options.body) });
-      if (posts === 1) throw new Error('Response lost after acceptance');
-      return stored[0];
-    }
-    assert.ok(path.includes(`/commits/${sha}/statuses?`));
-    if (path.endsWith('page=1')) return Array.from({ length: 100 }, () => ({ context: 'another/check' }));
-    return stored;
+    assert.equal(options?.method, 'POST');
+    assert.equal(path, `/repos/example/repo/statuses/${sha}`);
+    assert.deepEqual(JSON.parse(options.body), payload);
+    stored.unshift({ id: stored.length + 1, ...JSON.parse(options.body) });
+    if (stored.length === 1) throw new Error('Response lost after acceptance');
+    return stored[0];
   };
   await assert.rejects(publishStatus(request, 'example/repo', sha, payload), /Response lost/);
   await publishStatus(request, 'example/repo', sha, payload);
-  assert.equal(posts, 1);
-  stored.unshift({ id: 999, ...payload, state: 'pending' });
-  await publishStatus(request, 'example/repo', sha, payload);
-  assert.equal(posts, 2, 'an older matching status must not hide a newer different status');
+  assert.equal(stored.length, 2, 'a lost response may create a duplicate status entry');
 });
 
 test('unconfirmed status submission remains retryable', async () => {

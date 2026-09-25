@@ -54,5 +54,3 @@ services:
         value: /data/codex
       - key: CODEX_BIN
         value: codex
-      - key: GITHUB_TOKEN_FILE
-        value: ""

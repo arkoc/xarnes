@@ -1,6 +1,6 @@
 # xarnes-agent
 
-**~600 lines. One-click deployment. Full control. Your custom skills.**
+**~500 LOC. One-click deployment. Full control. Your custom skills.**
 
 `xarnes-agent` is a small, self-hosted pull-request review runner. It watches your GitHub repository
 and uses [OpenAI Codex](https://learn.chatgpt.com/docs) to run your configured skill on each eligible
@@ -11,7 +11,7 @@ PR. Your skill chooses the checks, verdict, and complete review body. The runner
 
 ## Why xarnes-agent
 
-- **Easy to verify.** The whole runner is one [~600-line file](agent.mjs) using only Node.js built-ins.
+- **Easy to verify.** The whole runner is one [~500-line file](agent.mjs) using only Node.js built-ins.
   Read it end to end to see how credentials, reviews, retries, and delivery work.
 - **Host it yourself.** Deploy to your Render account with one click, or run Docker on your own
   infrastructure. Your persistent volume holds the sign-ins, queue, and results.
@@ -32,7 +32,7 @@ Click **Deploy to Render** and provide the four required environment values:
 | `STATUS_CONTEXT` | Review/check name, for example `security-review`. GitHub displays `security-review/pr-123` for PR #123 |
 
 All optional watcher settings are declared in [render.yaml](render.yaml) and applied automatically.
-Open your service's **Environment** page to see all 19 settings, including these defaults:
+Open your service's **Environment** page to see all 18 settings, including these defaults:
 
 | Optional setting | Render default |
 |---|---|
@@ -50,7 +50,6 @@ Open your service's **Environment** page to see all 19 settings, including these
 | `DATA_DIR` | `/data` |
 | `CODEX_HOME` | `/data/codex` |
 | `CODEX_BIN` | `codex` |
-| `GITHUB_TOKEN_FILE` | empty (use `GITHUB_TOKEN`) |
 
 Render's creation form prompts only for the four required values. To change optional settings
 permanently, edit your fork's `render.yaml`: a later Blueprint sync can overwrite changes made on
@@ -207,7 +206,7 @@ example explicitly select `gpt-6-astra` with `FAST_MODE=true`.
 |---|---|---|
 | `GITHUB_REPO` | required | Repository to watch, `owner/name`. Its presence selects `watch` when no command is given |
 | `SKILL` | required | Skill directory in that repository; a bare name means `skills/<name>` |
-| `GITHUB_TOKEN` / `GITHUB_TOKEN_FILE` | required | GitHub credential; the file form takes precedence |
+| `GITHUB_TOKEN` | required | GitHub credential, supplied as an environment variable |
 | `TARGET_BRANCHES` | `main` | Comma-separated base branches; only non-draft PRs into these are reviewed |
 | `STATUS_CONTEXT` | required | Commit-status check name; the agent appends `/pr-<number>` |
 | `MAX_CONCURRENCY` | `1` | Reviews run in parallel, one Codex sign-in each |
@@ -272,6 +271,8 @@ below this limit.
   closed-PR records are removed.
 - **Concurrency is one process.** Workers share the process; the state file and GitHub status
   writes are serialized; a PR never has two reviews in flight, so a new head on an active PR waits.
+- **Status delivery** posts directly to GitHub. Retrying after a lost response may add an identical
+  entry to the commit's status history. Review delivery still checks its marker to avoid duplicate reviews.
 - **Healthcheck** (`node /app/agent.mjs healthcheck`) is a liveness check: the discovery loop ticked
   within `max(2 min, 3 × POLL_SECONDS)`. A failing GitHub scan logs `Poll failed` but is not
   "unhealthy", because a restart would not fix it.
@@ -286,11 +287,12 @@ below this limit.
 
 ## Security notes
 
-The skill loaded from the merge base cannot be replaced by the PR under review; symlinks in the skill
-directory are rejected. Codex workers do not receive the GitHub token; only the wrapper fetches and
-publishes. Review bodies and logs are scrubbed of known token shapes and of every secret the agent
-loaded. That said, the default `SANDBOX=container` trusts the container as the boundary: skill
-commands run as the same user as the wrapper, with the volume and network reachable. Use this for
+The skill is loaded from the merge base. Skill files and any symlink targets are trusted; the runner
+does not scan or restrict symlinks. Codex workers do not receive the GitHub token; only the wrapper
+fetches and publishes. Review bodies, saved results, and logs redact the exact `GITHUB_TOKEN` value;
+other credentials and encoded tokens are not redacted. The default `SANDBOX=container` trusts the
+container as the boundary: skill commands run as the same user as the wrapper, with the volume and
+network reachable. Use this for
 repositories you control. Reviewing hostile or public pull requests needs workers isolated from the
 publisher and its credentials.
 

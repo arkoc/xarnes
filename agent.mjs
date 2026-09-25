@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, writeFile, rename, mkdtemp, rm, readdir, lstat } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, mkdtemp, rm } from 'node:fs/promises';
+import { createInterface } from 'node:readline';
 import { join, resolve, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -10,7 +11,6 @@ const codex = env.CODEX_BIN ?? 'codex';
 const children = new Set();
 let stopping = false;
 const shutdown = new AbortController();
-const secrets = [];
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const hasText = value => typeof value === 'string' && value.trim().length > 0;
 const isCommit = value => typeof value === 'string' && /^[a-f0-9]{40,64}$/.test(value);
@@ -18,13 +18,7 @@ function sameRevision(entry, pr) {
   return entry?.sha === pr.head.sha && entry.baseRef === pr.base?.ref;
 }
 function clean(text) {
-  for (const secret of secrets) if (secret) text = text.split(secret).join('[redacted]');
-  return text.replace(/(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)/g, '[redacted]');
-}
-async function secret(name) {
-  const value = env[`${name}_FILE`] ? (await readFile(env[`${name}_FILE`], 'utf8')).trim() : env[name];
-  if (value) secrets.push(value);
-  return value;
+  return env.GITHUB_TOKEN ? text.replaceAll(env.GITHUB_TOKEN, '[redacted]') : text;
 }
 // Non-interactive children run in their own process group so a timeout or shutdown reaches their descendants too.
 function terminate(proc, signal) {
@@ -41,19 +35,10 @@ function command(bin, args, options = {}) {
     const timer = setTimeout(() => { timedOut = true; terminate(proc, 'SIGKILL'); }, options.timeout ?? 30 * 60_000);
     proc.on('error', (error) => { clearTimeout(timer); fail(error); });
     if (!options.interactive) {
-      // Buffer complete lines so a secret split across chunks is still redacted.
       for (const stream of [proc.stdout, proc.stderr]) {
-        let buffer = '';
         stream.setEncoding('utf8');
-        stream.on('data', (part) => {
-          if (options.capture && stream === proc.stdout) { stdout += part; return; }
-          buffer += part;
-          let index;
-          while ((index = buffer.indexOf('\n')) >= 0) {
-            console.log(prefix + clean(buffer.slice(0, index))); buffer = buffer.slice(index + 1);
-          }
-        });
-        stream.on('end', () => { if (buffer) console.log(prefix + clean(buffer)); });
+        if (options.capture && stream === proc.stdout) stream.on('data', part => { stdout += part; });
+        else createInterface({ input: stream, crlfDelay: Infinity }).on('line', line => console.log(prefix + clean(line)));
       }
       proc.stdin.on('error', () => {});
       proc.stdin.end(options.input ?? '');
@@ -133,13 +118,9 @@ export function commitStatus(repo, number, entry, maxAttempts, context) {
   return { state, description, context: `${context}/pr-${number}`, target_url: entry.reviewUrl ?? `https://github.com/${repo}/pull/${number}` };
 }
 export async function publishStatus(request, repo, sha, payload) {
-  // A lost POST response must not append another identical status on every retry/restart.
-  const statuses = await allPages(request, `/repos/${repo}/commits/${sha}/statuses`);
-  const latest = statuses.find(status => status.context?.toLowerCase() === payload.context.toLowerCase());
-  if (latest && ['state', 'description', 'target_url'].every(key => latest[key] === payload[key])) return;
   const posted = await request(`/repos/${repo}/statuses/${sha}`, { method: 'POST', body: JSON.stringify(payload) });
   if (!Number.isSafeInteger(posted?.id) || posted.state !== payload.state || posted.context !== payload.context) {
-    throw new Error('GitHub did not confirm the commit status; will reconcile before retrying');
+    throw new Error('GitHub did not confirm the commit status; will retry');
   }
 }
 const verdicts = {
@@ -243,20 +224,7 @@ export async function prepareReview(workspace, baseline, target, head, selected,
   const base = await command('git', ['merge-base', target, head], { cwd: workspace, capture: true, label });
   if (!isCommit(base)) throw new Error('Could not determine the PR merge base');
   await command('git', ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--detach', baseline, base], { cwd: workspace, label });
-  // A skill must resolve entirely inside the BASE snapshot, never through a symlink to HEAD or the host.
-  let directory = baseline;
-  for (const part of skillPath.split('/')) {
-    directory = join(directory, part);
-    if (!(await lstat(directory)).isDirectory()) throw new Error(`Skill directory must not be a symlink: ${skillPath}`);
-  }
-  async function rejectLinks(path) {
-    for (const entry of await readdir(path, { withFileTypes: true })) {
-      if (entry.isSymbolicLink()) throw new Error(`Skill resources must not be symlinks: ${entry.name}`);
-      if (entry.isDirectory()) await rejectLinks(join(path, entry.name));
-    }
-  }
-  await rejectLinks(directory);
-  const manifest = join(directory, 'SKILL.md');
+  const manifest = join(baseline, skillPath, 'SKILL.md');
   if (!(await readFile(manifest, 'utf8')).trim()) throw new Error(`Empty skill at BASE: ${skillPath}/SKILL.md`);
   return { base, manifest };
 }
@@ -324,8 +292,8 @@ async function main() {
     }
     return;
   }
-  const githubToken = await secret('GITHUB_TOKEN');
-  if (githubToken) { env.GITHUB_TOKEN = githubToken; env.GH_TOKEN = githubToken; }
+  const githubToken = env.GITHUB_TOKEN;
+  if (githubToken) env.GH_TOKEN = githubToken;
   const timeout = Number(env.TASK_TIMEOUT_SECONDS ?? 1800);
   if (!Number.isFinite(timeout) || timeout < 1 || timeout * 1000 > 2147483647) throw new Error('TASK_TIMEOUT_SECONDS must be between 1 and 2147483 seconds');
   if (mode === 'task') {
@@ -344,7 +312,7 @@ async function main() {
   }
   const repo = env.GITHUB_REPO;
   if (!repo || !/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('Set GITHUB_REPO=owner/repository');
-  if (!githubToken) throw new Error('Set GITHUB_TOKEN or GITHUB_TOKEN_FILE');
+  if (!githubToken) throw new Error('Set GITHUB_TOKEN');
   const selected = repositorySkillPath(env.SKILL);
   const interval = Number(env.POLL_SECONDS ?? 15);
   if (!Number.isSafeInteger(interval) || interval < 15) throw new Error('POLL_SECONDS must be an integer of at least 15');
@@ -431,7 +399,6 @@ async function main() {
     await updateStatus(number);
   }
   const gitAuth = `Authorization: Basic ${Buffer.from(`x-access-token:${githubToken}`).toString('base64')}`;
-  secrets.push(gitAuth);
   const gitEnv = { ...env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: `http.https://github.com/${repo}.git.extraheader`, GIT_CONFIG_VALUE_0: gitAuth };
   async function review(pr, slot) {
     const previous = state.prs[pr.number];
