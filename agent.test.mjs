@@ -49,7 +49,7 @@ test('polling follows every page and propagates errors instead of marking unseen
   await assert.rejects(allPages(async () => { throw new Error('rate limit'); }, '/pulls'), /rate limit/);
 });
 test('script runs instructions through CLI, saves output, and redacts split credential output', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'standalone-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'xarnes-test-'));
   try {
     const fake = join(dir, 'codex');
     await writeFile(fake, `#!/usr/bin/env node\nimport {writeFileSync} from 'node:fs';\nconst args=process.argv.slice(2);\nif (!args.includes('service_tier=\"fast\"') || !args.includes('features.fast_mode=true')) throw new Error('Fast tier was not forwarded');\nlet input=''; for await (const part of process.stdin) input+=part;\nwriteFileSync(args[args.indexOf('-o')+1], 'Done: '+input);\nprocess.stdout.write('fixture-secret-');\nsetTimeout(()=>process.stdout.write('not-for-logs\\n'),10);\n`, { mode: 0o700 });
@@ -64,11 +64,11 @@ test('script runs instructions through CLI, saves output, and redacts split cred
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 test('a failed sign-in stops the run before any task executes', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'standalone-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'xarnes-test-'));
   try {
     const fake = join(dir, 'codex');
     await writeFile(fake, `#!/usr/bin/env node\nimport {writeFileSync} from 'node:fs';\nif (process.argv[2] === 'login') { console.log('Open https://auth.example/device and enter code ABCD-0000'); process.exit(7); }\nwriteFileSync(process.env.DATA_DIR + '/executed', 'yes');\n`, { mode: 0o700 });
-    const result = spawnSync(process.execPath, [fileURLToPath(new URL('./agent.mjs', import.meta.url)), 'task'], { encoding: 'utf8', env: { PATH: process.env.PATH, CODEX_BIN: fake, DATA_DIR: dir, CODEX_HOME: join(dir, 'home'), INSTRUCTIONS: 'Test' } });
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL('./agent.mjs', import.meta.url)), 'task'], { encoding: 'utf8', env: { PATH: process.env.PATH, CODEX_BIN: fake, DATA_DIR: dir, CODEX_HOME: join(dir, 'home'), WORKSPACE: join(dir, 'work'), INSTRUCTIONS: 'Test' } });
     assert.equal(result.status, 1);
     assert.match(result.stdout, /needs a ChatGPT sign-in/);
     assert.match(result.stdout, /enter code ABCD-0000/);
@@ -78,7 +78,7 @@ test('a failed sign-in stops the run before any task executes', async () => {
 });
 
 test('incomplete persisted state stops before polling or changing saved data', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'standalone-state-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'xarnes-state-test-'));
   try {
     const statePath = join(dir, 'prs-example--repo.json');
     await mkdir(join(dir, 'workspaces'));
@@ -103,7 +103,7 @@ test('incomplete persisted state stops before polling or changing saved data', a
       await writeFile(statePath, source);
       const result = spawnSync(process.execPath, ['--import', loader, fileURLToPath(new URL('./agent.mjs', import.meta.url)), 'watch'], {
         encoding: 'utf8', timeout: 5000,
-        env: { PATH: process.env.PATH, CODEX_BIN: join(dir, 'no-codex'), DATA_DIR: dir, GITHUB_REPO: 'example/repo', GITHUB_TOKEN: 'fixture-github', SKILL: 'skills/review' },
+        env: { PATH: process.env.PATH, CODEX_BIN: join(dir, 'no-codex'), DATA_DIR: dir, GITHUB_REPO: 'example/repo', GITHUB_TOKEN: 'fixture-github', SKILL: 'skills/review', STATUS_CONTEXT: 'review' },
       });
       assert.equal(result.status, 1, result.stderr);
       assert.match(result.stderr, /Invalid watcher state.*restore a valid backup/);
@@ -115,7 +115,7 @@ test('incomplete persisted state stops before polling or changing saved data', a
 });
 
 test('healthcheck needs a recent discovery-loop heartbeat and no credentials', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'standalone-health-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'xarnes-health-test-'));
   try {
     const run = () => spawnSync(process.execPath, [fileURLToPath(new URL('./agent.mjs', import.meta.url)), 'healthcheck'], {
       encoding: 'utf8', env: { PATH: process.env.PATH, DATA_DIR: dir, GITHUB_REPO: 'example/repo', POLL_SECONDS: '15' },
@@ -129,8 +129,24 @@ test('healthcheck needs a recent discovery-loop heartbeat and no credentials', a
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('watcher requires a check name and validates configuration before requesting sign-in', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'xarnes-config-test-'));
+  try {
+    for (const context of [undefined, '', '   ', '/', 'x'.repeat(201)]) {
+      const env = { PATH: process.env.PATH, DATA_DIR: dir, CODEX_BIN: join(dir, 'must-not-run'),
+        GITHUB_REPO: 'example/repo', GITHUB_TOKEN: 'fixture-github', SKILL: 'skills/review' };
+      if (context !== undefined) env.STATUS_CONTEXT = context;
+      const result = spawnSync(process.execPath, [fileURLToPath(new URL('./agent.mjs', import.meta.url)), 'watch'], { env, encoding: 'utf8', timeout: 5000 });
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /Set STATUS_CONTEXT/);
+      assert.doesNotMatch(result.stdout, /needs a ChatGPT sign-in/);
+      await assert.rejects(readFile(join(dir, 'prs-example--repo.json')), { code: 'ENOENT' });
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('without a saved sign-in, the watcher signs every slot in from its own logs, then starts', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'standalone-auth-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'xarnes-auth-test-'));
   let w;
   try {
     const bin = join(dir, 'bin'); await mkdir(bin);
@@ -158,7 +174,7 @@ appendFileSync(process.env.LOGIN_LOG,'device '+process.env.CODEX_HOME+'\\n'); wr
 });
 
 test('login initializes missing slots, reuses saved logins, and can renew one explicit slot', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'standalone-login-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'xarnes-login-test-'));
   try {
     const bin = join(dir, 'bin'); await mkdir(bin);
     await writeFile(join(bin, 'codex'), `#!/usr/bin/env node
@@ -224,7 +240,7 @@ function watcher(loader, env) {
   let proc, logs = '';
   return {
     start() {
-      proc = spawn(process.execPath, ['--import', loader, agent, 'watch'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      proc = spawn(process.execPath, ['--import', loader, agent, 'watch'], { env: { STATUS_CONTEXT: 'review', ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
       proc.stdout.on('data', p => logs += p); proc.stderr.on('data', p => logs += p);
     },
     async stop(signal = 'SIGTERM') {
@@ -243,7 +259,7 @@ function watcher(loader, env) {
 }
 
 test('watcher loads the BASE skill, approves pass, and recovers a lost GitHub response across restarts without rerunning Codex', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'standalone-watch-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'xarnes-watch-test-'));
   let w;
   try {
     const fixture = await fixtureRepository(dir);
@@ -266,7 +282,7 @@ assert.equal(readFileSync(join(dirname(manifest),'references/checklist.md'),'utf
 assert.equal(execFileSync(process.env.REAL_GIT,['rev-parse','HEAD'],{cwd:workspace,encoding:'utf8'}).trim(),process.env.FIXTURE_HEAD);
 assert.ok(input.includes('BASE (merge base): '+process.env.FIXTURE_BASE));
 assert.ok(input.includes('\"verdict\" (\"pass\", \"comment\", or \"block\")') && input.includes('\"body\" (a non-empty string'));
-assert.ok(input.includes('This response contract takes precedence over output-format examples in the skill.'));
+assert.ok(input.includes('without Markdown fences or surrounding text'));
 assert.ok(input.includes('Target branch tip: '+process.env.FIXTURE_TARGET));
 assert.ok(!input.includes('untrusted-pr-title') && !input.includes('untrusted-pr-description'));
 const metadata=JSON.parse(input.match(/PR metadata is in ("[^"\\n]+")./)[1]);
@@ -312,10 +328,11 @@ globalThis.fetch=async(url,options={})=>{
     assert.equal(state.base, fixture.base);
     assert.equal(state.skill, 'skills/review');
     assert.equal(JSON.parse(await readFile(state.output, 'utf8')).verdict, 'pass');
+    assert.ok(state.output.endsWith('.json'));
     assert.equal((await stat(statePath)).mode & 0o077, 0, 'state is private');
     assert.equal((await stat(state.output)).mode & 0o077, 0, 'saved result is private');
     assert.equal(state.status, 'review_pending');
-    assert.match(state.marker, /standalone-agent:/);
+    assert.match(state.marker, /xarnes:/);
     // Simulate the delivery delay elapsing before restarting to reconcile the lost response.
     const delayed = JSON.parse(await readFile(statePath, 'utf8'));
     delayed.prs['1'].retryAt = new Date(0).toISOString();
@@ -349,7 +366,7 @@ test('repository skill selection rejects absolute paths and traversal', () => {
 });
 
 test('missing skills at BASE and symlinked resources fail instead of using HEAD', async () => {
-  const dir=await mkdtemp(join(tmpdir(),'standalone-base-test-'));
+  const dir=await mkdtemp(join(tmpdir(),'xarnes-base-test-'));
   try {
     const fixture=await fixtureRepository(dir);
     await assert.rejects(prepareReview(fixture.repo,join(dir,'missing'),fixture.target,fixture.head,'skills/missing'),/ENOENT/);
@@ -361,28 +378,21 @@ test('missing skills at BASE and symlinked resources fail instead of using HEAD'
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
 
-test('skills select the sole skill, a main entry, or an explicit entry without instructions', async () => {
+test('task skill instructions load the selected directory and reject missing or empty manifests', async () => {
   const { skillInstructions } = await import('./agent.mjs');
-  const dir = await mkdtemp(join(tmpdir(), 'standalone-skills-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'xarnes-skills-test-'));
   try {
-    const add = async name => {
-      await mkdir(join(dir,name));
-      await writeFile(join(dir,name,'SKILL.md'), `---\nname: ${name}\ndescription: Test fixture\n---\nPerform the test task.\n`);
-    };
-    await assert.rejects(skillInstructions(dir), /No skills found/);
-    await add('review-pr');
-    assert.ok((await skillInstructions(dir)).includes(join(dir,'review-pr','SKILL.md')));
-    await add('fix-tests');
-    await assert.rejects(skillInstructions(dir), /Choose an entry skill/);
-    assert.ok((await skillInstructions(dir,'fix-tests')).includes(join(dir,'fix-tests','SKILL.md')));
-    await assert.rejects(skillInstructions(dir,'../outside'), /was not found/);
-    await add('main');
-    assert.ok((await skillInstructions(dir)).includes(join(dir,'main','SKILL.md')));
+    await assert.rejects(skillInstructions(dir), /ENOENT/);
+    const manifest = join(dir, 'SKILL.md');
+    await writeFile(manifest, ' \n');
+    await assert.rejects(skillInstructions(dir), /Empty skill/);
+    await writeFile(manifest, 'Run the configured task.');
+    assert.ok((await skillInstructions(dir)).includes(manifest));
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
 
 test('skills-only CLI task uses a repository-relative skill without a separate mount', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'standalone-skills-cli-'));
+  const dir = await mkdtemp(join(tmpdir(), 'xarnes-skills-cli-'));
   try {
     const skills = join(dir,'work','skills');
     await mkdir(join(skills,'review-pr','references'),{recursive:true});
@@ -391,8 +401,15 @@ test('skills-only CLI task uses a repository-relative skill without a separate m
     const fake=join(dir,'codex');
     await writeFile(fake, `#!/usr/bin/env node\nimport {writeFileSync,readFileSync} from 'node:fs';\nconst args=process.argv.slice(2);let input='';for await(const p of process.stdin)input+=p;\nif(!input.includes(process.env.WORKSPACE+'/skills/review-pr/SKILL.md'))process.exit(2);\nconst resource=readFileSync(process.env.WORKSPACE+'/skills/review-pr/references/checklist.md','utf8');\nwriteFileSync(args[args.indexOf('-o')+1],resource);\n`,{mode:0o700});
     await mkdir(join(dir,'auth')); await writeFile(join(dir,'auth','auth.json'),'{}');
-    const result=spawnSync(process.execPath,[fileURLToPath(new URL('./agent.mjs', import.meta.url)),'task'],{encoding:'utf8',env:{PATH:process.env.PATH,HOME:dir,DATA_DIR:dir,CODEX_HOME:join(dir,'auth'),WORKSPACE:join(dir,'work'),CODEX_BIN:fake,SKILL:'skills/review-pr'}});
-    assert.equal(result.status,0,result.stderr);
+    const env = { PATH: process.env.PATH, HOME: dir, DATA_DIR: dir, CODEX_HOME: join(dir, 'auth'), WORKSPACE: join(dir, 'work'), CODEX_BIN: fake };
+    const run = extra => spawnSync(process.execPath, [fileURLToPath(new URL('./agent.mjs', import.meta.url)), 'task'], { encoding: 'utf8', env: { ...env, ...extra } });
+    for (const config of [{ SKILL: 'skills/review-pr' }, { SKILL: 'review-pr', SKILLS_DIR: skills }]) {
+      const result = run(config);
+      assert.equal(result.status, 0, result.stderr);
+    }
+    const missing = run({});
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /Set SKILL/, 'a single available skill must not be selected implicitly');
     const { readdir }=await import('node:fs/promises');
     const files=await readdir(join(dir,'runs'));
     assert.equal(await readFile(join(dir,'runs',files[0]),'utf8'),'Check correctness.');
@@ -400,7 +417,7 @@ test('skills-only CLI task uses a repository-relative skill without a separate m
 });
 
 test('watcher processes every PR sequentially through review delivery', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'standalone-sequential-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'xarnes-sequential-test-'));
   let w;
   try {
     const fixture = await fixtureRepository(dir);
@@ -481,14 +498,14 @@ test('pruning preserves completed review identity and pending results while remo
 });
 
 test('a reopened PR receives its saved review without running Codex again', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'standalone-reopen-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'xarnes-reopen-test-'));
   let w;
   try {
     const bin = join(dir, 'bin'); await mkdir(bin);
     await writeFile(join(bin, 'codex'), '#!/bin/sh\necho "codex must not run" >&2; exit 7\n', { mode: 0o700 });
-    const sha = 'a'.repeat(40), marker = '<!-- standalone-agent:11111111-2222-3333-4444-555555555555 -->';
+    const sha = 'a'.repeat(40), marker = '<!-- xarnes:11111111-2222-3333-4444-555555555555 -->';
     await mkdir(join(dir, 'runs'));
-    const output = join(dir, 'runs', 'saved.md');
+    const output = join(dir, 'runs', 'saved.json');
     await writeFile(output, JSON.stringify({ verdict: 'block', body: 'Unsafe change.' }));
     const statePath = join(dir, 'prs-example--repo.json');
     await writeFile(statePath, JSON.stringify({ initialized: true, prs: { 7: { sha, baseRef: 'main', base: sha, skill: 'skills/review', status: 'closed', attempts: 1, verdict: 'block', output, marker } }, statuses: {}, queue: [] }));
@@ -525,7 +542,7 @@ globalThis.fetch=async(url,options={})=>{
 });
 
 test('MAX_CONCURRENCY runs reviews in parallel, each in its own Codex home, and never two for one PR', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'standalone-concurrent-test-'));
+  const dir = await mkdtemp(join(tmpdir(), 'xarnes-concurrent-test-'));
   let w;
   try {
     const fixture = await fixtureRepository(dir);

@@ -78,7 +78,7 @@ globalThis.fetch=async(url,options={})=>{
  }
  return new Response(JSON.stringify(path.endsWith('/pulls')?prs.filter(p=>p.state==='open'):path.includes('/reviews')?[]:pr));
 };`);
-  const runEnv = { PATH: `${bin}:${process.env.PATH}`, HOME: dir, CODEX_HOME: join(dir, 'codex-home'), DATA_DIR: dir, WORKSPACE: join(dir, 'workspace'), GITHUB_TOKEN: 'fixture-github', GITHUB_REPO: 'example/repo', SKILL: 'skills/review', TARGET_BRANCHES: 'main,dev', RUN_EXISTING: 'true', POLL_SECONDS: '15', ...extraEnv };
+  const runEnv = { PATH: `${bin}:${process.env.PATH}`, HOME: dir, CODEX_HOME: join(dir, 'codex-home'), DATA_DIR: dir, WORKSPACE: join(dir, 'workspace'), GITHUB_TOKEN: 'fixture-github', GITHUB_REPO: 'example/repo', SKILL: 'skills/review', STATUS_CONTEXT: 'review', TARGET_BRANCHES: 'main,dev', RUN_EXISTING: 'true', POLL_SECONDS: '15', ...extraEnv };
   let current;
   let logs = '';
   const state = async () => JSON.parse(await readFile(statePath, 'utf8'));

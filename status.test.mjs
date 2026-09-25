@@ -16,22 +16,22 @@ test('commit status exposes progress, non-blocking comments, failures, and cance
     [{ status: 'stale' }, 'error'],
     [{ status: 'closed' }, 'error'],
   ]) {
-    const result = commitStatus('example/repo', 1, entry);
+    const result = commitStatus('example/repo', 1, entry, 3, 'review');
     assert.equal(result.state, expected);
     if (expected === 'pending') assert.match(result.description, { queued: /^Queued for review$/, running: /running \(attempt 1\/3\)/, review_pending: /finished; posting/, failed: /retry scheduled/ }[entry.status]);
     assert.ok(result.description.length <= 140);
     assert.equal(result.target_url, 'https://github.com/example/repo/pull/1');
   }
-  assert.equal(commitStatus('example/repo', 1, { status: 'baseline' }), null);
+  assert.equal(commitStatus('example/repo', 1, { status: 'baseline' }, 3, 'review'), null);
   const entry = { status: 'succeeded', verdict: 'pass', reviewUrl: 'https://github.com/example/repo/pull/1#pullrequestreview-1' };
-  assert.equal(commitStatus('example/repo', 1, entry).target_url, entry.reviewUrl);
-  assert.notEqual(commitStatus('example/repo', 1, entry).context, commitStatus('example/repo', 2, entry).context, 'PRs sharing a SHA must not overwrite each other');
-  assert.equal(commitStatus('example/repo', 7, entry).context, 'review/pr-7');
-  assert.equal(commitStatus('example/repo', 7, entry, 3, 'layerswap/security-agent').context, 'layerswap/security-agent/pr-7');
+  assert.equal(commitStatus('example/repo', 1, entry, 3, 'review').target_url, entry.reviewUrl);
+  assert.notEqual(commitStatus('example/repo', 1, entry, 3, 'review').context, commitStatus('example/repo', 2, entry, 3, 'review').context, 'PRs sharing a SHA must not overwrite each other');
+  assert.equal(commitStatus('example/repo', 7, entry, 3, 'review').context, 'review/pr-7');
+  assert.equal(commitStatus('example/repo', 7, entry, 3, 'team/security-review').context, 'team/security-review/pr-7');
 });
 
 test('status reconciles a lost response, follows pagination, and only trusts the newest matching context', async () => {
-  const payload = commitStatus('example/repo', 1, { status: 'succeeded', verdict: 'pass' });
+  const payload = commitStatus('example/repo', 1, { status: 'succeeded', verdict: 'pass' }, 3, 'review');
   let stored = [], posts = 0;
   const request = async (path, options) => {
     if (options?.method === 'POST') {
@@ -54,6 +54,6 @@ test('status reconciles a lost response, follows pagination, and only trusts the
 });
 
 test('unconfirmed status submission remains retryable', async () => {
-  const payload = commitStatus('example/repo', 1, { status: 'queued' });
+  const payload = commitStatus('example/repo', 1, { status: 'queued' }, 3, 'review');
   await assert.rejects(publishStatus(async (_path, options) => options ? { id: 1, state: 'success' } : [], 'example/repo', sha, payload), /did not confirm/);
 });

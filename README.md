@@ -56,12 +56,12 @@ Render's creation form prompts only for the four required values. To change opti
 permanently, edit your fork's `render.yaml`: a later Blueprint sync can overwrite changes made on
 the Environment page. Settings used only by local task mode are listed under Configuration below.
 
-Codex uses your ChatGPT account. On first start the container prints a sign-in link and code in
-its logs; open the link, enter the code, and the agent starts watching. No shell access is needed.
+Codex uses your ChatGPT account. On first start, follow the sign-in link and code in the logs for
+each configured slot. Sign-ins run one at a time; polling starts after all slots are authenticated.
+No shell access is needed.
 
 The [Render blueprint](render.yaml) builds the Dockerfile as a background worker with a persistent
 1 GB disk at `/data`. The GitHub token and saved Codex sign-in live on your Render service.
-Render allows disks to grow but not shrink; existing larger disks need a data migration to use 1 GB.
 
 If you fork this repository, update the button above to point to your fork.
 Render builds directly from the repository; no published image is required.
@@ -102,27 +102,30 @@ Render builds directly from the repository; no published image is required.
    is posted. The agent then re-reads the PR (still open, same head, same base, not a draft),
    submits the review bound to the reviewed commit, and updates the commit status. If the response
    is lost, the next scan finds the marker on GitHub and does not post again.
-6. **Retry.** A failed step is retried with backoff (5, 10, 20, 40 minutes, capped at 60) until
-   `MAX_ATTEMPTS` is spent. A run interrupted by a crash retries immediately on restart; a graceful
-   stop does not consume an attempt.
+6. **Retry.** Failed review execution uses backoff (5, 10, 20, 40 minutes, capped at 60) until
+   `MAX_ATTEMPTS` is spent. Interrupted runs retry on restart when attempts remain; a graceful
+   stop does not consume an attempt. GitHub delivery failures retry the saved result without
+   rerunning Codex or consuming review attempts.
 
 ## What developers see
 
-A commit status named `<STATUS_CONTEXT>/pr-<number>` follows the PR through three stages:
+A commit status named `<STATUS_CONTEXT>/pr-<number>` tracks review progress:
 
 | Stage | Status |
 |---|---|
 | Waiting for a worker | 🟡 Pending: Queued for review |
 | Picked up by a worker | 🟡 Pending: Review running (attempt n/N) |
+| Review finished, delivery pending | 🟡 Pending: Review finished; posting the result |
 | Result `pass` | ✅ Success: Review passed |
 | Result `comment` | ✅ Success: Review complete with non-blocking comments |
 | Result `block` | ❌ Failure: Review blocked; changes requested |
+| Retry scheduled | 🟡 Pending: Review failed; retry scheduled |
 | Retry budget exhausted | ⚠️ Error: operator action needed |
 | Superseded revision or closed PR | ⚠️ Error: superseded or cancelled |
 
-The review body comes directly from the skill. Headings, icons, tables, evidence, and any commit
-reference belong in the skill's `body`; the runner does not generate a report or a preview. It
-redacts credentials and appends a hidden delivery marker, without adding visible formatting.
+The skill writes the complete review body, including any headings, icons, tables, evidence, and
+commit references. The runner posts it with credential redaction and a hidden delivery marker,
+without adding visible formatting.
 
 These statuses are informational: their names include the PR number, so they cannot serve as one
 reusable required status check for the branch. To gate merging on reviews, configure required
@@ -133,7 +136,8 @@ its owner's own PRs, so use a dedicated reviewer identity.
 
 ```sh
 docker build -t xarnes-agent:local .
-cp agent.env.example agent.env   # set GITHUB_REPO, SKILL, GITHUB_TOKEN; chmod 600 agent.env
+cp agent.env.example agent.env   # set GITHUB_REPO, SKILL, GITHUB_TOKEN, STATUS_CONTEXT
+chmod 600 agent.env
 ```
 
 Sign in once, or skip this and follow the link the watcher prints on first start:
@@ -165,8 +169,9 @@ One-off run against a local checkout, without GitHub (no review is posted):
 docker run --rm -v my-agent:/data -v "$PWD:/workspace" -e SKILL=skills/review xarnes-agent:local task
 ```
 
-Task mode accepts `INSTRUCTIONS` or `INSTRUCTIONS_FILE` instead of a skill (see
-[`instructions.example.md`](instructions.example.md)) and leaves any edits in the mounted workspace.
+Task mode runs the explicitly configured `SKILL`. For a free-form task, set `INSTRUCTIONS` or
+`INSTRUCTIONS_FILE` (see [instructions.example.md](instructions.example.md)) and leave `SKILL` unset.
+Any edits remain in the mounted workspace.
 
 ## Configuration
 
@@ -180,7 +185,7 @@ example explicitly select `gpt-6-astra` with `FAST_MODE=true`.
 | `SKILL` | required | Skill directory in that repository; a bare name means `skills/<name>` |
 | `GITHUB_TOKEN` / `GITHUB_TOKEN_FILE` | required | GitHub credential; the file form takes precedence |
 | `TARGET_BRANCHES` | `main` | Comma-separated base branches; only non-draft PRs into these are reviewed |
-| `STATUS_CONTEXT` | `review` | Commit-status check name; the agent appends `/pr-<number>` |
+| `STATUS_CONTEXT` | required | Commit-status check name; the agent appends `/pr-<number>` |
 | `MAX_CONCURRENCY` | `1` | Reviews run in parallel, one Codex sign-in each |
 | `MAX_ATTEMPTS` | `3` | Attempts per head commit before the failure becomes terminal |
 | `POLL_SECONDS` | `15` | Discovery interval and minimum delivery-retry delay; integer ≥ 15 |
@@ -207,7 +212,8 @@ Configure `SKILL` with the directory of the skill you want the runner to execute
 `SKILL=skills/your-review`. That directory must contain `SKILL.md` and any references it needs,
 committed to the repository being reviewed. Your configured skill owns the review policy, the
 verdict, and the complete review body.
-Its final response must be one JSON object with two required fields:
+Its final response must be a JSON object with two required fields, without Markdown fences or
+surrounding text:
 
 ```json
 {
@@ -225,24 +231,21 @@ Its final response must be one JSON object with two required fields:
 | `comment` | `COMMENT` | success |
 | `block` | `REQUEST_CHANGES` | failure |
 
-There are no required findings, coverage, briefing, or other report fields. Extra fields are ignored;
-the runner does not interpret the body or recompute the verdict. All content and presentation choices
-belong to the skill. The review prompt explicitly supplies this contract, which takes precedence over
-output-format examples in the skill. Results without `body` are rejected, not converted from the old
-report format.
+These are the only required fields. Extra fields are ignored. The runner validates the verdict
+and body, then posts the skill's Markdown using the matching GitHub review action.
 
 The runner posts `body` with credential redaction and a hidden marker for duplicate prevention.
-The saved response stays under `/data/runs`. The runner's 60,000-byte publishing limit includes the
-marker; oversized reviews fail rather than truncate. Skills should keep their bodies below this limit.
+The JSON response is saved under `/data/runs/*.json`. The runner's 60,000-byte publishing limit
+includes the marker; oversized reviews fail rather than truncate. Skills should keep their bodies
+below this limit.
 
 ## Reliability notes
 
 - **State** lives in `/data/prs-OWNER--REPO.json`: per PR the reviewed head, base, attempt count,
   result path, marker, and delivered review id. Writes are fsynced and atomically renamed. Invalid
-  state stops startup rather than being replaced. Saved state must include the queue, commit
-  statuses, each PR's target branch, and an attempt count for every started review; missing fields
-  are rejected without modifying the file. Entries for closed PRs are pruned except the review
-  identity, so reopening a PR at the same commit cannot repeat a review.
+  state stops startup without changing the file. Closed PRs retain completed and pending review
+  records so reopening can reuse a saved result or recognize an already-posted review. Other
+  closed-PR records are removed.
 - **Concurrency is one process.** Workers share the process; the state file and GitHub status
   writes are serialized; a PR never has two reviews in flight, so a new head on an active PR waits.
 - **Healthcheck** (`node /app/agent.mjs healthcheck`) is a liveness check: the discovery loop ticked
@@ -251,9 +254,11 @@ marker; oversized reviews fail rather than truncate. Skills should keep their bo
 - **Shutdown** on `SIGTERM` aborts GitHub calls, signals every Codex process group, escalates to
   `SIGKILL` after five seconds, and marks interrupted runs for immediate retry without spending an
   attempt. Allow at least 15 seconds for graceful shutdown.
-- **Volume layout:** `codex[-N]/` sign-ins, `runs/` raw results, `prs-*.json` state, `workspaces/`
-  disposable checkouts (cleared on startup), `agent.lock` single-owner lock. Size the volume for
-  `MAX_CONCURRENCY × (repository history + two working trees)`.
+- **Storage:** `codex[-N]/` holds sign-ins, `runs/` saved results, `prs-*.json` watcher state, and
+  `agent.lock` the single-owner lock. Each review uses temporary checkouts under `workspaces/`;
+  both snapshots and their Git history are removed after success or failure. Startup clears any
+  checkouts left by a crash. Saved results have no automatic expiry. Allow space for
+  `MAX_CONCURRENCY × (repository history + two working trees)`, plus saved results and Codex data.
 
 ## Security notes
 

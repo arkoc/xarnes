@@ -7,13 +7,13 @@ import { parseReview, publishReview, reviewSubmission, pendingPRs } from './agen
 
 const sha = 'a'.repeat(40);
 const targets = new Set(['main', 'dev']);
-const marker = '<!-- standalone-agent:00000000-0000-4000-8000-000000000001 -->';
+const marker = '<!-- xarnes:00000000-0000-4000-8000-000000000001 -->';
 const report = verdict => ({ verdict, body: `Skill-written ${verdict} review.\n\n**Evidence:** See \`api.cs\`.` });
 const stateFor = event => ({ APPROVE: 'APPROVED', COMMENT: 'COMMENTED', REQUEST_CHANGES: 'CHANGES_REQUESTED' })[event];
 async function savedResult(verdict, fn) {
   const dir = await mkdtemp(join(tmpdir(), 'agent-review-result-'));
   try {
-    const output = join(dir, 'result.md');
+    const output = join(dir, 'result.json');
     await writeFile(output, JSON.stringify(report(verdict)));
     await fn({ sha, baseRef: 'dev', marker, output });
   } finally { await rm(dir, { recursive: true, force: true }); }
@@ -61,18 +61,18 @@ test('only verdict and body are required; additional report fields do not affect
   for (const verdict of ['pass', 'comment', 'block']) {
     const result = report(verdict);
     assert.deepEqual(parseReview(JSON.stringify(result)), result);
-    // The previous coverage validator rejected this record before it could be posted.
-    const extra = { ...result, findings: [{ severity: 'high' }], coverage: { not_reviewed: [{ at: 'api.cs', reason: 'Outside the review scope.' }] } };
+    const extra = { ...result, metadata: { checkedFiles: ['api.cs'] } };
     assert.deepEqual(parseReview(JSON.stringify(extra)), result);
   }
 });
 
 test('invalid JSON, unknown verdicts, and missing or blank bodies never publish', () => {
-  const invalid = ['pass', '{"verdict":"pass"}', 'null', '[]', 'text\n' + JSON.stringify(report('pass'))];
+  const invalid = ['pass', '{"verdict":"pass"}', 'null', '[]', 'text\n' + JSON.stringify(report('pass')),
+    '```json\n' + JSON.stringify(report('comment')) + '\n```'];
   for (const verdict of ['needs_human', 'approve', 'PASS', 'toString', '__proto__', ['pass'], null, undefined]) invalid.push(JSON.stringify({ ...report('pass'), verdict }));
   for (const body of [undefined, null, '', ' \t\r\n ', 12, [], {}]) invalid.push(JSON.stringify({ verdict: 'pass', body }));
   for (const source of invalid) assert.throws(() => parseReview(source));
-  assert.deepEqual(parseReview('```json\n' + JSON.stringify(report('comment')) + '\n```'), report('comment'));
+  assert.deepEqual(parseReview(' \n' + JSON.stringify(report('comment')) + '\n'), report('comment'));
 });
 
 test('review bodies retain credential redaction without adding presentation', () => {
