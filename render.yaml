@@ -1,0 +1,27 @@
+# Render blueprint: a Docker background worker with a persistent disk at /data.
+# The disk pins the service to one instance, which is the single-owner rule the agent needs.
+services:
+  - type: worker
+    name: xarnes-agent
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: GITHUB_REPO
+        sync: false
+      - key: SKILL
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: TARGET_BRANCHES
+        value: main,dev
+      - key: STATUS_CONTEXT
+        value: review
+      - key: MAX_CONCURRENCY
+        value: "1"
+      - key: RUN_EXISTING
+        value: "false"
