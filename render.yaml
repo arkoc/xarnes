@@ -18,14 +18,14 @@ services:
         sync: false
       - key: GITHUB_TOKEN
         sync: false
+      - key: STATUS_CONTEXT
+        sync: false
 
       # Optional watcher settings: applied automatically and shown on the
       # service's Environment page. MODEL and FAST_MODE match agent.env.example;
       # the other values match the runner's defaults.
       - key: TARGET_BRANCHES
         value: main,dev
-      - key: STATUS_CONTEXT
-        value: review
       - key: MAX_CONCURRENCY
         value: "1"
       - key: MAX_ATTEMPTS

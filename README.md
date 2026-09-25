@@ -30,13 +30,14 @@ builds the Dockerfile and starts the watcher with persistent storage.
 
 ## Deploy to Render
 
-Click **Deploy to Render** and provide the three required environment values:
+Click **Deploy to Render** and provide the four required environment values:
 
 | Field | Value |
 |---|---|
 | `GITHUB_REPO` | `owner/name` of the repository to watch |
 | `SKILL` | Directory in that repository holding `SKILL.md`, for example `skills/review` |
 | `GITHUB_TOKEN` | Fine-grained token with **Contents: read**, **Pull requests: write**, **Commit statuses: write** |
+| `STATUS_CONTEXT` | Review/check name, for example `security-review`. GitHub displays `security-review/pr-123` for PR #123 |
 
 All optional watcher settings are declared in [render.yaml](render.yaml) and applied automatically.
 Open your service's **Environment** page to see all 19 settings, including these defaults:
@@ -44,7 +45,6 @@ Open your service's **Environment** page to see all 19 settings, including these
 | Optional setting | Render default |
 |---|---|
 | `TARGET_BRANCHES` | `main,dev` |
-| `STATUS_CONTEXT` | `review` |
 | `MAX_CONCURRENCY` | `1` |
 | `MAX_ATTEMPTS` | `3` |
 | `POLL_SECONDS` | `15` |
@@ -60,7 +60,7 @@ Open your service's **Environment** page to see all 19 settings, including these
 | `CODEX_BIN` | `codex` |
 | `GITHUB_TOKEN_FILE` | empty (use `GITHUB_TOKEN`) |
 
-Render's creation form prompts only for the three required values. To change optional settings
+Render's creation form prompts only for the four required values. To change optional settings
 permanently, edit your fork's `render.yaml`: a later Blueprint sync can overwrite changes made on
 the Environment page. Settings used only by local task mode are listed under Configuration below.
 
