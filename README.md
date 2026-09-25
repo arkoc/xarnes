@@ -109,23 +109,47 @@ Render builds directly from the repository; no published image is required.
 
 ## What developers see
 
-A commit status named `<STATUS_CONTEXT>/pr-<number>` tracks review progress:
+A status check named `<STATUS_CONTEXT>/pr-<number>` appears in the PR's checks section. The agent
+publishes it as a GitHub commit status and updates it automatically as the review progresses:
 
-| Stage | Status |
-|---|---|
-| Waiting for a worker | 🟡 Pending: Queued for review |
-| Picked up by a worker | 🟡 Pending: Review running (attempt n/N) |
-| Review finished, delivery pending | 🟡 Pending: Review finished; posting the result |
-| Result `pass` | ✅ Success: Review passed |
-| Result `comment` | ✅ Success: Review complete with non-blocking comments |
-| Result `block` | ❌ Failure: Review blocked; changes requested |
-| Retry scheduled | 🟡 Pending: Review failed; retry scheduled |
-| Retry budget exhausted | ⚠️ Error: operator action needed |
-| Superseded revision or closed PR | ⚠️ Error: superseded or cancelled |
+| Stage | Status check | GitHub review action |
+|---|---|---|
+| Waiting for a worker | 🟡 Pending: Queued for review | No review posted yet |
+| Picked up by a worker | 🟡 Pending: Review running (attempt n/N) | No review posted yet |
+| Review finished, delivery pending | 🟡 Pending: Review finished; posting the result | Posting or confirming delivery of the review |
+| Result `pass` | ✅ Success: Review passed | Approves the PR and posts the review report |
+| Result `comment` | ✅ Success: Review complete with non-blocking comments | Posts the review report with comments, without approval |
+| Result `block` | ❌ Failure: Review blocked; changes requested | Requests changes and posts the review report with blocking findings |
+| Retry scheduled | 🟡 Pending: Review failed; retry scheduled | No final result yet |
+| Retry budget exhausted | ⚠️ Error: operator action needed | Delivery has not completed |
+| Superseded revision or closed PR | ⚠️ Error: superseded or cancelled | No new review posted for the ineligible revision |
+
+For a passing review, the sequence is **queued → running → posting the review → approved + check
+passed**. The final success or failure status is published only after GitHub confirms the review
+was posted (or the agent finds an already-posted review when reconciling a retry). The report is
+the body of that approval, comment, or change request; it is not a separate duplicate PR comment.
 
 The skill writes the complete review body, including any headings, icons, tables, evidence, and
 commit references. The runner posts it with credential redaction and a hidden delivery marker,
 without adding visible formatting.
+
+### Examples on GitHub
+
+**Running.** The check is pending and shows the current attempt. Required approval remains
+outstanding while the agent reviews the PR.
+
+![Pending security review showing Review running, attempt 2 of 3](docs/images/review-running.jpg)
+
+**Changes requested.** A blocking verdict posts a change request and marks the check as failed.
+In this example, the repository's review rules also block merging.
+
+![Failed security review with changes requested and merging blocked](docs/images/review-blocked.jpg)
+
+**Passed with comments.** A non-blocking comment verdict marks the check as passed and posts the
+review comments. It does **not** approve the PR, so GitHub can still show **Review required** and
+**Merging is blocked**, as in this example. A `pass` verdict submits an approval instead.
+
+![Successful security review with non-blocking comments, with approval still required](docs/images/review-comments.jpg)
 
 These statuses are informational: their names include the PR number, so they cannot serve as one
 reusable required status check for the branch. To gate merging on reviews, configure required
