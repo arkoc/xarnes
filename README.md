@@ -1,33 +1,24 @@
 # xarnes-agent
 
-**One file. Zero dependencies. Your configured skill, run by Codex on every eligible pull request.**
+**~600 lines. One-click deployment. Full control. Your custom skills.**
 
-`xarnes-agent` watches a GitHub repository and uses [OpenAI Codex](https://learn.chatgpt.com/docs)
-to run the skill you configure with `SKILL` on every eligible pull request. Your skill defines what
-to check, which verdict to return, and the complete review body to post. The runner publishes that
-result as a GitHub review and a commit status: `pass` approves, `comment` comments, and `block`
-requests changes. New commits are re-reviewed; nothing is ever posted twice.
-
-The whole runner is [`agent.mjs`](agent.mjs): about 600 lines of plain Node.js using only the
-standard library. There is no framework, no database, and no npm install. Paste the file into any
-AI assistant and ask it what the code does; the answer fits on one screen. The Render blueprint
-builds the Dockerfile and starts the watcher with persistent storage.
+`xarnes-agent` is a small, self-hosted pull-request review runner. It watches your GitHub repository
+and uses [OpenAI Codex](https://learn.chatgpt.com/docs) to run your configured skill on each eligible
+PR. Your skill chooses the checks, verdict, and complete review body. The runner posts the result:
+`pass` approves, `comment` comments, and `block` requests changes.
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/arkoc/xarnes)
 
-## Why you might want this
+## Why xarnes-agent
 
-- **Auditable.** One ~600-line file with no dependencies is something you can actually read, or have
-  an AI read for you, before you hand it a token to your repository.
-- **Your skill, your rules.** Set `SKILL` to the skill folder you want to run in the repository being
-  reviewed. It is loaded from the merge base so a pull request can never rewrite its own reviewer.
-- **Exactly-once delivery.** Results are saved before they are posted, every review carries a unique
-  marker, and delivery is reconciled against GitHub before each attempt. Restarts, crashes, and lost
-  responses never produce a duplicate review.
-- **Visible progress.** Developers see `Queued for review`, `Review running`, and the result as a
-  commit status on the PR, plus the review body written by the skill.
-- **Run on Render or locally with Docker.** One volume for state and the Codex sign-in;
-  everything else is environment variables.
+- **Easy to verify.** The whole runner is one [~600-line file](agent.mjs) using only Node.js built-ins.
+  Read it end to end to see how credentials, reviews, retries, and delivery work.
+- **Host it yourself.** Deploy to your Render account with one click, or run Docker on your own
+  infrastructure. Your persistent volume holds the sign-ins, queue, and results.
+- **Full control.** Choose the repository, branches, model, concurrency, and reviewer identity.
+  Inspect and change the source, configuration, and saved state.
+- **Your custom skills.** Set `SKILL` to a skill in your repository. It defines the review policy
+  and the Markdown body to post; the runner handles execution, retries, and GitHub delivery.
 
 ## Deploy to Render
 
