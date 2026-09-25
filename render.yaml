@@ -21,14 +21,16 @@ services:
         sync: false
       - key: STATUS_CONTEXT
         sync: false
+      # Per-instance: each extra slot needs its own Codex sign-in on this service's disk, so a
+      # blueprint sync must never change it. Start with 1; raise it after signing in the extra slots.
+      - key: MAX_CONCURRENCY
+        sync: false
 
       # Optional watcher settings: applied automatically and shown on the
       # service's Environment page. MODEL and FAST_MODE match agent.env.example;
       # the other values match the runner's defaults.
       - key: TARGET_BRANCHES
         value: main,dev
-      - key: MAX_CONCURRENCY
-        value: "3"
       - key: MAX_ATTEMPTS
         value: "3"
       - key: POLL_SECONDS
