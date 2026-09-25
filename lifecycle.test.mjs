@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const agent = fileURLToPath(new URL('./agent.mjs', import.meta.url));
-const result = { verdict: 'pass', reasons: [], briefing: { summary: 'Fixture review', decisions: [] }, findings: [], coverage: { invariants: [], scan: [], not_reviewed: [] } };
+const result = { verdict: 'pass', body: 'Fixture review.' };
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, describe, timeout = 12000) {
   const start = Date.now();

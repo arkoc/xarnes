@@ -8,13 +8,7 @@ import { parseReview, publishReview, reviewSubmission, pendingPRs } from './agen
 const sha = 'a'.repeat(40);
 const targets = new Set(['main', 'dev']);
 const marker = '<!-- standalone-agent:00000000-0000-4000-8000-000000000001 -->';
-const report = verdict => ({
-  verdict,
-  reasons: verdict === 'pass' ? [] : ['Authorization needs attention.'],
-  briefing: { summary: 'The PR changes authorization.', decisions: ['The endpoint uses a different scope.'] },
-  findings: verdict === 'pass' ? [] : [{ severity: verdict === 'block' ? 'high' : 'low', confidence: 'high', title: 'Authorization changed', path: 'api.cs', symbol: 'MapRoute', side: 'head', quote: 'AllowAnonymous()', evidence: 'An anonymous caller can reach MapRoute.', fix: 'Require the existing scope.' }],
-  coverage: { invariants: [{ id: 'AUTH-1', status: verdict === 'pass' ? 'held' : verdict === 'block' ? 'violated' : 'unresolved', note: 'Checked `read|write` scopes.\nCaller must satisfy <scope>.' }], scan: [], not_reviewed: [] },
-});
+const report = verdict => ({ verdict, body: `Skill-written ${verdict} review.\n\n**Evidence:** See \`api.cs\`.` });
 const stateFor = event => ({ APPROVE: 'APPROVED', COMMENT: 'COMMENTED', REQUEST_CHANGES: 'CHANGES_REQUESTED' })[event];
 async function savedResult(verdict, fn) {
   const dir = await mkdtemp(join(tmpdir(), 'agent-review-result-'));
@@ -38,17 +32,7 @@ for (const [verdict, event] of [['pass', 'APPROVE'], ['comment', 'COMMENT'], ['b
         assert.equal(path, '/repos/example/repo/pulls/42/reviews');
         assert.equal(body.event, event);
         assert.equal(body.commit_id, sha);
-        assert.ok(body.body.endsWith(marker));
-        assert.doesNotMatch(body.body, /The PR changes authorization|The endpoint uses a different scope|### Decisions/);
-        const label = { pass: '✅ PASS', comment: '💬 COMMENT', block: '⛔ BLOCKED' }[verdict];
-        assert.ok(body.body.startsWith(`## ${label} · Review`));
-        const status = { pass: '✅ Held', comment: '❓ Unresolved', block: '❌ Violated' }[verdict];
-        assert.ok(body.body.includes(`| AUTH-1 | ${status} | Checked \`read\\|write\` scopes.<br>Caller must satisfy &lt;scope&gt;. |`));
-        assert.doesNotMatch(body.body, /### Coverage|"invariants"|"not_reviewed"/);
-        if (verdict !== 'pass') {
-          assert.match(body.body, /AllowAnonymous\(\)/);
-          assert.match(body.body, /Require the existing scope/);
-        }
+        assert.equal(body.body, report(verdict).body + '\n\n' + marker);
         return { id: 17, state: stateFor(event), commit_id: sha, html_url: 'https://github.com/example/repo/pull/42#pullrequestreview-17' };
       };
       const outcome = await publishReview(request, 'example/repo', 42, entry, targets);
@@ -61,55 +45,46 @@ for (const [verdict, event] of [['pass', 'APPROVE'], ['comment', 'COMMENT'], ['b
   });
 }
 
-test('findings retain every severity, location, impact, fix, and code quote in the compact layout', () => {
-  const result = report('block');
-  const quote = '```markdown\n</details>\n<script>example</script>\n```';
-  result.findings = ['critical', 'high', 'medium', 'low'].map(severity => ({
-    ...result.findings[0], severity, path: 'api/<route>`handler.cs', symbol: 'Handle<T>', quote,
-  }));
-  result.reasons = ['First reason.\nSupporting detail.', 'Second reason.'];
+test('the skill owns Markdown formatting and whitespace; only the hidden delivery marker is appended', () => {
+  const result = {
+    verdict: 'block',
+    body: '  ## Custom review\r\n\r\n| Check | Result |\r\n| --- | --- |\r\n| Scope | ⛔ |\r\n\r\n<details><summary>Evidence</summary>\r\n\r\n```js\r\na < b && c > d\r\n```\r\n</details>  \n',
+  };
   const original = JSON.stringify(result);
-  const { body } = reviewSubmission(result, sha, marker);
-  for (const label of ['🚨 CRITICAL', '🔴 HIGH', '🟠 MEDIUM', '🟡 LOW']) assert.ok(body.includes(`#### ${label}`));
-  assert.match(body, /### Findings \(4\)/);
-  assert.match(body, /<code>api\/&lt;route&gt;`handler.cs<\/code>/);
-  assert.match(body, /<code>Handle&lt;T&gt;<\/code>/);
-  assert.match(body, /\*\*Confidence:\*\* high/);
-  assert.match(body, /\*\*Impact\*\*\n\nAn anonymous caller/);
-  assert.match(body, /\*\*Suggested fix\*\*\n\nRequire the existing scope/);
-  assert.ok(body.includes(`\`\`\`\`text\n${quote}\n\`\`\`\``), 'embedded fences and HTML remain literal code');
-  assert.match(body, /<summary>Review rationale<\/summary>\n\n- First reason\.\n  Supporting detail\.\n- Second reason\./);
-  assert.ok(body.endsWith(marker), 'publication marker remains intact');
-  assert.equal(JSON.stringify(result), original, 'presentation must not rewrite the saved result');
+  assert.deepEqual(parseReview(original), result);
+  const submission = reviewSubmission(result, sha, marker);
+  assert.deepEqual(submission, { event: 'REQUEST_CHANGES', commit_id: sha, body: result.body + '\n\n' + marker });
+  assert.equal(JSON.stringify(result), original, 'the saved result is not rewritten');
 });
 
-test('a verdict explained only by reasons keeps its rationale visible', () => {
-  const result = report('block');
-  result.findings = [];
-  result.coverage.invariants = [];
-  const { body, event } = reviewSubmission(parseReview(JSON.stringify(result)), sha, marker);
-  assert.equal(event, 'REQUEST_CHANGES');
-  assert.match(body, /❓ No invariant checks were reported/);
-  assert.match(body, /### Review rationale\n\n- Authorization needs attention/);
-  assert.doesNotMatch(body, /<details>|### Findings/);
-});
-
-test('invalid, unknown, incomplete, and contradictory results never approve', () => {
-  const invalid = ['pass', '{"verdict":"pass"}', 'null', '[]', 'text\n' + JSON.stringify(report('pass'))];
-  for (const verdict of ['needs_human', 'approve', 'PASS', 'toString', ['pass'], null]) invalid.push(JSON.stringify({ ...report('pass'), verdict }));
-  invalid.push(JSON.stringify({ ...report('block'), verdict: 'pass' }));
-  for (const coverage of [undefined, {}, { invariants: [{ id: 'RULE-1', status: 'unresolved', note: 'Missing evidence' }], scan: [], not_reviewed: [] }, { invariants: [], scan: [{ check: 'hidden', at: 'api.cs', resolution: 'failed' }], not_reviewed: [] }]) {
-    invalid.push(JSON.stringify({ ...report('pass'), coverage }));
+test('only verdict and body are required; additional report fields do not affect delivery', () => {
+  for (const verdict of ['pass', 'comment', 'block']) {
+    const result = report(verdict);
+    assert.deepEqual(parseReview(JSON.stringify(result)), result);
+    // The previous coverage validator rejected this record before it could be posted.
+    const extra = { ...result, findings: [{ severity: 'high' }], coverage: { not_reviewed: [{ at: 'api.cs', reason: 'Outside the review scope.' }] } };
+    assert.deepEqual(parseReview(JSON.stringify(extra)), result);
   }
+});
+
+test('invalid JSON, unknown verdicts, and missing or blank bodies never publish', () => {
+  const invalid = ['pass', '{"verdict":"pass"}', 'null', '[]', 'text\n' + JSON.stringify(report('pass'))];
+  for (const verdict of ['needs_human', 'approve', 'PASS', 'toString', '__proto__', ['pass'], null, undefined]) invalid.push(JSON.stringify({ ...report('pass'), verdict }));
+  for (const body of [undefined, null, '', ' \t\r\n ', 12, [], {}]) invalid.push(JSON.stringify({ verdict: 'pass', body }));
   for (const source of invalid) assert.throws(() => parseReview(source));
-  assert.equal(parseReview('```json\n' + JSON.stringify(report('comment')) + '\n```').verdict, 'comment');
+  assert.deepEqual(parseReview('```json\n' + JSON.stringify(report('comment')) + '\n```'), report('comment'));
+});
+
+test('review bodies retain credential redaction without adding presentation', () => {
+  const result = { verdict: 'comment', body: 'Credential: ghp_' + 'x'.repeat(36) };
+  assert.equal(reviewSubmission(result, sha, marker).body, 'Credential: [redacted]\n\n' + marker);
 });
 
 test('invalid saved output fails before any GitHub request', async () => {
   await savedResult('pass', async entry => {
     await writeFile(entry.output, '{"verdict":"pass"}');
     let calls = 0;
-    await assert.rejects(publishReview(async () => { calls++; }, 'example/repo', 42, entry, targets), /Incomplete/);
+    await assert.rejects(publishReview(async () => { calls++; }, 'example/repo', 42, entry, targets), /body must be a non-empty string/);
     assert.equal(calls, 0);
   });
 });
@@ -170,10 +145,15 @@ test('unconfirmed review responses remain errors for later reconciliation', asyn
   });
 });
 
-test('oversized reviews fail without dropping findings', () => {
-  const result = report('block');
-  result.findings[0].evidence = '証'.repeat(30000);
+test('the publishing limit includes the marker and counts UTF-8 bytes without truncating the body', () => {
+  const suffix = '\n\n' + marker;
+  const result = { verdict: 'block', body: 'x'.repeat(60000 - Buffer.byteLength(suffix)) };
+  assert.equal(Buffer.byteLength(reviewSubmission(result, sha, marker).body), 60000);
+  result.body += 'x';
   assert.throws(() => reviewSubmission(result, sha, marker), /publishing limit/);
+  result.body = '証'.repeat(30000);
+  assert.throws(() => reviewSubmission(result, sha, marker), /publishing limit/);
+  assert.equal(result.body.length, 30000);
 });
 
 test('pending review delivery retries even with updates disabled, while a new head starts new work', () => {

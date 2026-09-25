@@ -24,7 +24,7 @@ builds the Dockerfile and starts the watcher with persistent storage.
   marker, and delivery is reconciled against GitHub before each attempt. Restarts, crashes, and lost
   responses never produce a duplicate review.
 - **Visible progress.** Developers see `Queued for review`, `Review running`, and the result as a
-  commit status on the PR, plus a structured review with invariants, findings, and evidence.
+  commit status on the PR, plus the review body written by the skill.
 - **Run on Render or locally with Docker.** One volume for state and the Codex sign-in;
   everything else is environment variables.
 
@@ -84,7 +84,7 @@ Render builds directly from the repository; no published image is required.
                               │
                               ▼
    codex exec  ◄── skill path, repo, PR number, BASE, HEAD, PR metadata file
-                              │  returns JSON: verdict, reasons, findings, coverage
+                              │  returns JSON: verdict, body
                               ▼
    validate ─► save result + marker ─► recheck PR ─► POST review ─► commit status
 ```
@@ -103,8 +103,8 @@ Render builds directly from the repository; no published image is required.
    title and description, which the prompt marks as untrusted data. It never receives the GitHub
    token.
 4. **Validate.** The response must be a JSON object with a verdict of `pass`, `comment`, or `block`,
-   plus reasons, findings with evidence, and coverage. A `pass` with findings, a violated invariant,
-   or an unresolved scan hit is rejected. Nothing is posted for a malformed result.
+   and a non-empty `body` string. The skill decides the verdict and writes the complete review.
+   Nothing is posted for a malformed result.
 5. **Deliver.** The validated result is saved to the volume with a unique marker **before** anything
    is posted. The agent then re-reads the PR (still open, same head, same base, not a draft),
    submits the review bound to the reviewed commit, and updates the commit status. If the response
@@ -127,10 +127,9 @@ A commit status named `<STATUS_CONTEXT>/pr-<number>` follows the PR through thre
 | Retry budget exhausted | ⚠️ Error: operator action needed |
 | Superseded revision or closed PR | ⚠️ Error: superseded or cancelled |
 
-The review itself opens with `✅ PASS`, `💬 COMMENT`, or `⛔ BLOCKED`, then an invariant table
-(id, `Held` / `Violated` / `Unresolved`, evidence), then each finding with severity, location,
-confidence, impact, suggested fix, and the quoted code in an expandable block. Reasons that explain a
-verdict without findings stay visible. The reviewed commit is in the footer.
+The review body comes directly from the skill. Headings, icons, tables, evidence, and any commit
+reference belong in the skill's `body`; the runner does not generate a report or a preview. It
+redacts credentials and appends a hidden delivery marker, without adding visible formatting.
 
 These statuses are informational: their names include the PR number, so they cannot serve as one
 reusable required status check for the branch. To gate merging on reviews, configure required
@@ -212,25 +211,18 @@ user and pins its Node base image by digest and the Codex CLI by version.
 ## The skill contract
 
 A skill is a directory with `SKILL.md` and any references it needs, committed to the repository
-being reviewed. The agent tells Codex where it is and what the PR is; the skill decides how to
-review and returns one JSON object:
+being reviewed. The skill owns the review policy, the verdict, and the complete review body.
+Its final response must be one JSON object with two required fields:
 
 ```json
 {
   "verdict": "block",
-  "reasons": ["FND-3: lowercase fee symbols bypass the transfer fee cap"],
-  "briefing": { "summary": "…", "decisions": ["…"] },
-  "findings": [{
-    "severity": "high", "confidence": "high", "title": "…",
-    "path": "src/FeeCap.cs", "symbol": "FeeCapPolicy", "quote": "…", "evidence": "…", "fix": "…"
-  }],
-  "coverage": {
-    "invariants": [{ "id": "FND-3", "status": "violated", "note": "…" }],
-    "scan": [{ "check": "secret", "at": "src/Config.cs:12", "resolution": "benign: test fixture" }],
-    "not_reviewed": [{ "path": "docs/", "reason": "documentation only" }]
-  }
+  "body": "## Changes requested\n\nThe endpoint allows anonymous writes. Restore the authorization check."
 }
 ```
+
+- `verdict`: exactly `pass`, `comment`, or `block`.
+- `body`: a non-empty string containing the complete GitHub review in Markdown.
 
 | Verdict | GitHub review | Commit status |
 |---|---|---|
@@ -238,10 +230,15 @@ review and returns one JSON object:
 | `comment` | `COMMENT` | success |
 | `block` | `REQUEST_CHANGES` | failure |
 
-The skill owns the policy; the agent only checks the shape and refuses contradictions: a `pass` with
-findings, non-held invariants, or scan hits not marked `benign:`, or a `comment`/`block` with neither
-a reason nor a finding. The raw response is kept under `/data/runs`; reviews over GitHub's 60,000-byte
-limit fail rather than truncate.
+There are no required findings, coverage, briefing, or other report fields. Extra fields are ignored;
+the runner does not interpret the body or recompute the verdict. All content and presentation choices
+belong to the skill. The review prompt explicitly supplies this contract, which takes precedence over
+output-format examples in the skill. Results without `body` are rejected, not converted from the old
+report format.
+
+The runner posts `body` with credential redaction and a hidden marker for duplicate prevention.
+The saved response stays under `/data/runs`. The runner's 60,000-byte publishing limit includes the
+marker; oversized reviews fail rather than truncate. Skills should keep their bodies below this limit.
 
 ## Reliability notes
 
@@ -290,7 +287,7 @@ publisher and its credentials.
 node --test --test-timeout=120000 agent.test.mjs reviews.test.mjs lifecycle.test.mjs status.test.mjs
 ```
 
-59 tests cover the verdict mapping, review formatting, delivery reconciliation across restarts and
+Tests cover the verdict mapping, skill-written bodies, delivery reconciliation across restarts and
 lost responses, retries and backoff, concurrency, queue persistence, status transitions, shutdown,
 crash recovery, state validation, and first-start sign-in from the logs. They use temporary
 directories and mocked services; no network or credentials are needed.
