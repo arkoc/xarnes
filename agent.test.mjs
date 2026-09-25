@@ -431,7 +431,7 @@ globalThis.fetch=async(url,options={})=>{
  throw Error('Unexpected request '+path);
 };`);
     const calls = join(dir, 'calls'), runs = join(dir, 'runs-log');
-    const runEnv = { PATH: `${bin}:${process.env.PATH}`, HOME: dir, CODEX_HOME: join(dir, 'home'), DATA_DIR: dir, SKILL: 'skills/review', GITHUB_REPO: 'example/repo', GITHUB_TOKEN: 'fixture-github', RUN_EXISTING: 'true', POLL_SECONDS: '15', MOCK_CALLS: calls, MOCK_RUNS: runs, REAL_GIT: realGit, FIXTURE_REPO: fixture.repo, FIXTURE_HEAD: fixture.head, FIXTURE_TARGET: fixture.target };
+    const runEnv = { PATH: `${bin}:${process.env.PATH}`, HOME: dir, CODEX_HOME: join(dir, 'home'), DATA_DIR: dir, SKILL: 'skills/review', GITHUB_REPO: 'example/repo', GITHUB_TOKEN: 'fixture-github', TARGET_BRANCHES: 'dev', RUN_EXISTING: 'true', POLL_SECONDS: '15', MOCK_CALLS: calls, MOCK_RUNS: runs, REAL_GIT: realGit, FIXTURE_REPO: fixture.repo, FIXTURE_HEAD: fixture.head, FIXTURE_TARGET: fixture.target };
     await mkdir(runEnv.CODEX_HOME); await writeFile(join(runEnv.CODEX_HOME, 'auth.json'), '{}');
     const statePath = join(dir, 'prs-example--repo.json');
     w = watcher(loader, runEnv);
@@ -555,7 +555,7 @@ globalThis.fetch=async(url,options={})=>{
 };`);
     const runs = join(dir, 'runs-log'), home = join(dir, 'codex');
     // Slot 1 reuses its saved sign-in; slot 2 signs in before reviews start.
-    const env = { PATH: `${bin}:${process.env.PATH}`, HOME: dir, CODEX_HOME: home, DATA_DIR: dir, SKILL: 'skills/review', GITHUB_REPO: 'example/repo', GITHUB_TOKEN: 'fixture-github', RUN_EXISTING: 'true', MAX_CONCURRENCY: '2', MOCK_RUNS: runs, REAL_GIT: realGit, FIXTURE_REPO: fixture.repo, FIXTURE_HEAD: fixture.head, FIXTURE_TARGET: fixture.target };
+    const env = { PATH: `${bin}:${process.env.PATH}`, HOME: dir, CODEX_HOME: home, DATA_DIR: dir, SKILL: 'skills/review', GITHUB_REPO: 'example/repo', GITHUB_TOKEN: 'fixture-github', TARGET_BRANCHES: 'dev', RUN_EXISTING: 'true', MAX_CONCURRENCY: '2', MOCK_RUNS: runs, REAL_GIT: realGit, FIXTURE_REPO: fixture.repo, FIXTURE_HEAD: fixture.head, FIXTURE_TARGET: fixture.target };
     await mkdir(home); await writeFile(join(home, 'auth.json'), '{}');
     const statePath = join(dir, 'prs-example--repo.json');
     w = watcher(loader, env);

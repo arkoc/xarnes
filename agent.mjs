@@ -427,7 +427,7 @@ async function main() {
   const selected = repositorySkillPath(env.SKILL);
   const interval = Number(env.POLL_SECONDS ?? 15);
   if (!Number.isSafeInteger(interval) || interval < 15) throw new Error('POLL_SECONDS must be an integer of at least 15');
-  const targets = new Set((env.TARGET_BRANCHES ?? 'main,dev').split(',').map(name => name.trim()).filter(Boolean));
+  const targets = new Set((env.TARGET_BRANCHES ?? 'main').split(',').map(name => name.trim()).filter(Boolean));
   if (!targets.size) throw new Error('TARGET_BRANCHES must list at least one branch');
   const maxAttempts = Number(env.MAX_ATTEMPTS ?? 3);
   if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) throw new Error('MAX_ATTEMPTS must be a positive safe integer');

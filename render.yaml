@@ -25,7 +25,7 @@ services:
       # service's Environment page. MODEL and FAST_MODE match agent.env.example;
       # the other values match the runner's defaults.
       - key: TARGET_BRANCHES
-        value: main,dev
+        value: main
       - key: MAX_CONCURRENCY
         value: "1"
       - key: MAX_ATTEMPTS

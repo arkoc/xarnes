@@ -44,7 +44,7 @@ Open your service's **Environment** page to see all 19 settings, including these
 
 | Optional setting | Render default |
 |---|---|
-| `TARGET_BRANCHES` | `main,dev` |
+| `TARGET_BRANCHES` | `main` |
 | `MAX_CONCURRENCY` | `1` |
 | `MAX_ATTEMPTS` | `3` |
 | `POLL_SECONDS` | `15` |
@@ -187,7 +187,7 @@ example explicitly select `gpt-6-astra` with `FAST_MODE=true`.
 | `GITHUB_REPO` | required | Repository to watch, `owner/name`. Its presence selects `watch` when no command is given |
 | `SKILL` | required | Skill directory in that repository; a bare name means `skills/<name>` |
 | `GITHUB_TOKEN` / `GITHUB_TOKEN_FILE` | required | GitHub credential; the file form takes precedence |
-| `TARGET_BRANCHES` | `main,dev` | Comma-separated base branches; only non-draft PRs into these are reviewed |
+| `TARGET_BRANCHES` | `main` | Comma-separated base branches; only non-draft PRs into these are reviewed |
 | `STATUS_CONTEXT` | `review` | Commit-status check name; the agent appends `/pr-<number>` |
 | `MAX_CONCURRENCY` | `1` | Reviews run in parallel, one Codex sign-in each |
 | `MAX_ATTEMPTS` | `3` | Attempts per head commit before the failure becomes terminal |
