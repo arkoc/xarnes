@@ -1,11 +1,12 @@
 # xarnes-agent
 
-**One file. Zero dependencies. Every pull request reviewed by Codex before a human looks at it.**
+**One file. Zero dependencies. Your configured skill, run by Codex on every eligible pull request.**
 
-`xarnes-agent` watches a GitHub repository, runs a review skill with [OpenAI Codex](https://learn.chatgpt.com/docs)
-on every eligible pull request, and posts the verdict back as a GitHub review and a commit status.
-`pass` approves, `comment` comments, `block` requests changes. New commits are re-reviewed; nothing
-is ever posted twice.
+`xarnes-agent` watches a GitHub repository and uses [OpenAI Codex](https://learn.chatgpt.com/docs)
+to run the skill you configure with `SKILL` on every eligible pull request. Your skill defines what
+to check, which verdict to return, and the complete review body to post. The runner publishes that
+result as a GitHub review and a commit status: `pass` approves, `comment` comments, and `block`
+requests changes. New commits are re-reviewed; nothing is ever posted twice.
 
 The whole runner is [`agent.mjs`](agent.mjs): about 600 lines of plain Node.js using only the
 standard library. There is no framework, no database, and no npm install. Paste the file into any
@@ -18,8 +19,8 @@ builds the Dockerfile and starts the watcher with persistent storage.
 
 - **Auditable.** One ~600-line file with no dependencies is something you can actually read, or have
   an AI read for you, before you hand it a token to your repository.
-- **Your skill, your rules.** The review logic is a skill folder in the repository being reviewed,
-  loaded from the merge base so a pull request can never rewrite its own reviewer.
+- **Your skill, your rules.** Set `SKILL` to the skill folder you want to run in the repository being
+  reviewed. It is loaded from the merge base so a pull request can never rewrite its own reviewer.
 - **Exactly-once delivery.** Results are saved before they are posted, every review carries a unique
   marker, and delivery is reconciled against GitHub before each attempt. Restarts, crashes, and lost
   responses never produce a duplicate review.
@@ -210,8 +211,10 @@ user and pins its Node base image by digest and the Codex CLI by version.
 
 ## The skill contract
 
-A skill is a directory with `SKILL.md` and any references it needs, committed to the repository
-being reviewed. The skill owns the review policy, the verdict, and the complete review body.
+Configure `SKILL` with the directory of the skill you want the runner to execute, for example
+`SKILL=skills/your-review`. That directory must contain `SKILL.md` and any references it needs,
+committed to the repository being reviewed. Your configured skill owns the review policy, the
+verdict, and the complete review body.
 Its final response must be one JSON object with two required fields:
 
 ```json
