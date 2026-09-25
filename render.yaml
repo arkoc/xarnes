@@ -38,7 +38,7 @@ services:
       - key: WATCH_UPDATES
         value: "true"
       - key: MODEL
-        value: gpt-5.6-sol
+        value: gpt-6-sol
       - key: FAST_MODE
         value: "false"
       - key: TASK_TIMEOUT_SECONDS
