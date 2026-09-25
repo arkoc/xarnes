@@ -60,7 +60,8 @@ Codex uses your ChatGPT account. On first start the container prints a sign-in l
 its logs; open the link, enter the code, and the agent starts watching. No shell access is needed.
 
 The [Render blueprint](render.yaml) builds the Dockerfile as a background worker with a persistent
-disk at `/data`. The GitHub token and saved Codex sign-in live on your Render service.
+1 GB disk at `/data`. The GitHub token and saved Codex sign-in live on your Render service.
+Render allows disks to grow but not shrink; existing larger disks need a data migration to use 1 GB.
 
 If you fork this repository, update the button above to point to your fork.
 Render builds directly from the repository; no published image is required.

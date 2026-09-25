@@ -9,7 +9,7 @@ services:
     disk:
       name: data
       mountPath: /data
-      sizeGB: 10
+      sizeGB: 1
     envVars:
       # Required: Render prompts for these when creating the Blueprint.
       - key: GITHUB_REPO
