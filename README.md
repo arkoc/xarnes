@@ -33,11 +33,11 @@ Click **Deploy to Render** and provide the five required environment values:
 | `MAX_CONCURRENCY` | `1` to start. With the Codex engine each extra slot needs its own sign-in on this service's disk, so it is set per service and never overwritten by a Blueprint sync |
 
 All optional watcher settings are declared in [render.yaml](render.yaml) and applied automatically.
-Open your service's **Environment** page to see all 18 settings, including these defaults:
+Open your service's **Environment** page to see all 20 settings, including these defaults:
 
 | Optional setting | Render default |
 |---|---|
-| `TARGET_BRANCHES` | `main,dev` |
+| `TARGET_BRANCHES` | `main` |
 | `MAX_ATTEMPTS` | `3` |
 | `POLL_SECONDS` | `15` |
 | `RUN_EXISTING` | `false` |
@@ -258,8 +258,8 @@ Codex sign-ins stay on the disk untouched while Claude Code is in use; if one ex
 ## Configuration
 
 Everything is an environment variable. `agent.env.example` is a commented starting point.
-The table lists the runner's defaults when variables are absent. The Render blueprint and local
-example explicitly select `gpt-6-astra` with `FAST_MODE=true`.
+The table lists the runner's defaults when variables are absent. The Render blueprint and the local
+example explicitly select `MODEL=gpt-6-sol`; every other blueprint value equals the runner default.
 
 | Variable | Default | Purpose |
 |---|---|---|

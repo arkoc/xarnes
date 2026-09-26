@@ -27,10 +27,11 @@ services:
         sync: false
 
       # Optional watcher settings: applied automatically and shown on the
-      # service's Environment page. MODEL and FAST_MODE match agent.env.example;
-      # the other values match the runner's defaults.
+      # service's Environment page. MODEL matches agent.env.example; the other values are
+      # the runner's own defaults. A Blueprint sync re-applies every value here, so change a
+      # service's engine, model or branches in your fork's render.yaml rather than only in the dashboard.
       - key: TARGET_BRANCHES
-        value: main,dev
+        value: main
       - key: MAX_ATTEMPTS
         value: "3"
       - key: POLL_SECONDS
