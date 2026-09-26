@@ -85,7 +85,7 @@ export function pendingPRs(prs, state, { existing = false, updates = true, attem
     // A PR seen again after closing (or retargeting back) still has its saved result; deliver it instead of re-reviewing.
     if (entry.status === 'closed' || entry.status === 'stale') return true;
     if (entry.status === 'review_pending') return !entry.retryAt || Date.parse(entry.retryAt) <= now;
-    // A run stopped by the Codex usage limit is not the PR's fault: it retries after the pause and keeps its attempt budget.
+    // A run stopped by the engine's usage limit is not the PR's fault: it retries after the pause and keeps its attempt budget.
     if (entry.status === 'limited') return !entry.retryAt || Date.parse(entry.retryAt) <= now;
     // An interrupted run (still "running" after a restart) retries at once; a failed one backs off. Both share the attempt budget.
     if (entry.attempts >= attempts) return false;
@@ -109,7 +109,7 @@ export function commitStatus(repo, number, entry, maxAttempts, context) {
     case 'queued': description = 'Queued for review'; break;
     case 'running': description = `Review running (attempt ${entry.attempts}/${maxAttempts})`; break;
     case 'review_pending': description = 'Review finished; posting the result'; break;
-    case 'limited': description = 'Codex usage limit reached; review will retry automatically'; break;
+    case 'limited': description = `${engines[engineName].label} usage limit reached; review will retry automatically`; break;
     case 'failed':
       state = entry.attempts >= maxAttempts ? 'error' : 'pending';
       description = state === 'error' ? 'Review failed; retry limit reached, operator action needed' : 'Review failed; retry scheduled';
@@ -399,7 +399,7 @@ async function main() {
   const active = new Map();
   const freeSlots = [...slots];
   let completed = 0;
-  let pausedUntil = 0; // set when Codex reports its usage limit; no review starts before it passes
+  let pausedUntil = 0; // set when the engine reports its usage limit; no review starts before it passes
   // A run left "running" in the saved state was interrupted; it retries at once within its attempt budget.
   for (const entry of Object.values(state.prs)) if (entry.status === 'running') entry.status = 'failed';
   function recordStatus(number, entry) {
@@ -484,7 +484,7 @@ async function main() {
     try {
       runDirectory = await mkdtemp(join(workRoot, 'pr-'));
       const workspace = join(runDirectory, 'head');
-      console.log(`Running PR ${label} at ${pr.head.sha} (attempt ${attempt}/${maxAttempts}, Codex slot ${slot})`);
+      console.log(`Running PR ${label} at ${pr.head.sha} (attempt ${attempt}/${maxAttempts}, ${engine.label} slot ${slot})`);
       await command('git', ['init', '-q', workspace], { label });
       await command('git', ['-c', 'core.hooksPath=/dev/null', 'fetch', '--no-tags', `https://github.com/${repo}.git`, pr.head.sha, pr.base.sha], { cwd: workspace, env: gitEnv, timeout: 120_000, label });
       await command('git', ['-c', 'core.hooksPath=/dev/null', 'checkout', '--detach', pr.head.sha], { cwd: workspace, label });
@@ -516,7 +516,7 @@ async function main() {
         // Nor is the usage limit: keep the attempt, pause every slot, and say so on the PR instead of retrying.
         pausedUntil = Date.now() + usageLimitPause;
         Object.assign(entry, { status: 'limited', attempts: attempt - 1, retryAt: new Date(pausedUntil).toISOString() });
-        outcome = `Codex usage limit reached; reviews paused until ${entry.retryAt}`;
+        outcome = `${engine.label} usage limit reached; reviews paused until ${entry.retryAt}`;
       }
       else if (attempt < maxAttempts) { entry.retryAt = new Date(Date.now() + Math.min(60 * 60_000, 5 * 60_000 * 2 ** (attempt - 1))).toISOString(); outcome = `retrying after ${entry.retryAt}`; }
       state.prs[pr.number] = entry;

@@ -3,7 +3,7 @@
 **~500 LOC. One-click deployment. Full control. Your custom skills.**
 
 `xarnes-agent` is a small, self-hosted pull-request review runner. It watches your GitHub repository
-and uses [OpenAI Codex](https://learn.chatgpt.com/docs) to run your configured skill on each eligible
+and uses [OpenAI Codex](https://learn.chatgpt.com/docs) or [Claude Code](https://code.claude.com/docs) to run your configured skill on each eligible
 PR. Your skill chooses the checks, verdict, and complete review body. The runner posts the result:
 `pass` approves, `comment` comments, and `block` requests changes.
 
@@ -30,7 +30,7 @@ Click **Deploy to Render** and provide the five required environment values:
 | `SKILL` | Directory in that repository holding `SKILL.md`, for example `skills/review` |
 | `GITHUB_TOKEN` | Fine-grained token with **Contents: read**, **Pull requests: write**, **Commit statuses: write** |
 | `STATUS_CONTEXT` | Review/check name, for example `security-review`. GitHub displays `security-review/pr-123` for PR #123 |
-| `MAX_CONCURRENCY` | `1` to start. Each extra slot needs its own Codex sign-in on this service's disk, so it is set per service and never overwritten by a Blueprint sync |
+| `MAX_CONCURRENCY` | `1` to start. With the Codex engine each extra slot needs its own sign-in on this service's disk, so it is set per service and never overwritten by a Blueprint sync |
 
 All optional watcher settings are declared in [render.yaml](render.yaml) and applied automatically.
 Open your service's **Environment** page to see all 18 settings, including these defaults:
@@ -57,12 +57,14 @@ Render's creation form prompts only for the five required values. To change opti
 permanently, edit your fork's `render.yaml`: a later Blueprint sync can overwrite changes made on
 the Environment page. Settings used only by local task mode are listed under Configuration below.
 
-Codex uses your ChatGPT account. On first start, follow the sign-in link and code in the logs for
-each configured slot. Sign-ins run one at a time; polling starts after all slots are authenticated.
+The default engine, Codex, uses your ChatGPT account: on first start, follow the sign-in link and
+code in the logs for each configured slot. Sign-ins run one at a time; polling starts after all slots
+are authenticated. To review with Claude Code instead, see [Engines](#engines): it takes a token
+instead of a sign-in step.
 No shell access is needed.
 
 The [Render blueprint](render.yaml) builds the Dockerfile as a background worker with a persistent
-1 GB disk at `/data`. The GitHub token and saved Codex sign-in live on your Render service.
+1 GB disk at `/data`. The GitHub token and the engine's saved sign-in live on your Render service.
 
 If you fork this repository, update the button above to point to your fork.
 Render builds directly from the repository; no published image is required.
@@ -73,7 +75,7 @@ Render builds directly from the repository; no published image is required.
  every 15 s ─► list open PRs ─► keep non-draft PRs into TARGET_BRANCHES ─► queue new heads
                                                                                 │
                               ┌─────────────────────────────────────────────────┘
-                              ▼   (up to MAX_CONCURRENCY at once, one Codex sign-in each)
+                              ▼   (up to MAX_CONCURRENCY at once, one engine process each)
    fetch HEAD + target ─► merge-base = BASE ─► checkout HEAD, worktree BASE ─► load skill from BASE
                               │
                               ▼
@@ -91,8 +93,9 @@ Render builds directly from the repository; no published image is required.
    merge base, checks out the head, and creates a second worktree at the merge base. The skill is
    loaded **from the merge base**, never from the PR, so a PR that edits the skill still gets
    reviewed by the skill the target branch had.
-3. **Review.** Codex runs non-interactively in its own process group and Codex home, starting
-   outside both checkouts with user configuration, rules, and `AGENTS.md` loading disabled. It
+3. **Review.** The engine (Codex or Claude Code) runs non-interactively in its own process group,
+   starting outside both checkouts with the repository's agent instructions and project settings
+   disabled. It
    receives the skill path, repository, PR number, `BASE`, `HEAD`, and a metadata file with the PR
    title and description, which the prompt marks as untrusted data. It never receives the GitHub
    token.
@@ -106,7 +109,7 @@ Render builds directly from the repository; no published image is required.
 6. **Retry.** Failed review execution uses backoff (5, 10, 20, 40 minutes, capped at 60) until
    `MAX_ATTEMPTS` is spent. Interrupted runs retry on restart when attempts remain; a graceful
    stop does not consume an attempt. GitHub delivery failures retry the saved result without
-   rerunning Codex or consuming review attempts.
+   rerunning the engine or consuming review attempts.
 
 ## What developers see
 
@@ -122,7 +125,7 @@ publishes it as a GitHub commit status and updates it automatically as the revie
 | Result `comment` | ✅ Success: Review complete with non-blocking comments | Posts the review report with comments, without approval |
 | Result `block` | ❌ Failure: Review blocked; changes requested | Requests changes and posts the review report with blocking findings |
 | Retry scheduled | 🟡 Pending: Review failed; retry scheduled | No final result yet |
-| Codex usage limit reached | 🟡 Pending: Codex usage limit reached; review will retry automatically | Not an attempt; reviews pause 15 minutes, then resume |
+| Engine usage limit reached | 🟡 Pending: `<Engine>` usage limit reached; review will retry automatically | Not an attempt; reviews pause 15 minutes, then resume |
 | Retry budget exhausted | ⚠️ Error: operator action needed | Delivery has not completed |
 | Superseded revision or closed PR | ⚠️ Error: superseded or cancelled | No new review posted for the ineligible revision |
 
@@ -184,8 +187,9 @@ docker logs -f pr-agent
 
 Reuse the same volume on every run: it holds the sign-in, the state file, and the saved results.
 Run exactly one watcher per volume; the container holds a lock on it and refuses a second owner.
-With `MAX_CONCURRENCY=N`, each slot has its own Codex home (`/data/codex`, `/data/codex-2`, …) and
-its own sign-in; `login` signs in every slot that lacks one, `login 2` re-signs one slot. Slots
+With `MAX_CONCURRENCY=N` on the Codex engine, each slot has its own home (`/data/codex`,
+`/data/codex-2`, …) and its own sign-in; `login` signs in every slot that lacks one, `login 2` re-signs
+one slot. Slots
 signed in with the same ChatGPT account share its rate limit, so concurrency buys wall-clock time,
 not quota.
 
@@ -217,6 +221,40 @@ Both engines receive the same prompt and must return the same JSON verdict, so a
 one runs unchanged on the other. Model quality is a separate question; compare on a test PR before
 switching a production repository.
 
+### Switching a service to Claude Code
+
+1. **Create the token once, on your own machine** (it needs a browser and a terminal):
+
+   ```sh
+   claude setup-token
+   ```
+
+   Sign in with the Claude account whose subscription should pay for the reviews. The command
+   prints a token valid for one year. Keep it like a password; it is the whole credential.
+
+2. **Set three environment variables on the service** (Render: *Environment* page; Docker: `agent.env`):
+
+   ```dotenv
+   ENGINE=claude
+   CLAUDE_CODE_OAUTH_TOKEN=<the token>
+   MODEL=claude-opus-5-5
+   ```
+
+   Leave `MODEL` empty for Claude's default, or use `claude-sonnet-5` for faster, cheaper reviews.
+   `FAST_MODE` is ignored; `MAX_BUDGET_USD` optionally caps spend per review. `MAX_CONCURRENCY` needs
+   no extra sign-ins: every slot uses the same token. An API key in `ANTHROPIC_API_KEY` works instead
+   of the token, billed at API rates.
+
+3. **Redeploy.** The watcher starts immediately; there is no sign-in step. Without a token it exits
+   with a message naming exactly this variable.
+
+4. **Check the first review** in the logs (`Running PR … Claude Code slot 1`) and on the PR. The
+   status check and the review body look the same as with Codex; only the reviewer differs.
+
+Switching back is the same three variables the other way (`ENGINE=codex`, a Codex `MODEL`). The
+Codex sign-ins stay on the disk untouched while Claude Code is in use; if one expired meanwhile, run
+`login` once or delete that slot's `auth.json` and restart to get a fresh sign-in link in the logs.
+
 ## Configuration
 
 Everything is an environment variable. `agent.env.example` is a commented starting point.
@@ -230,7 +268,7 @@ example explicitly select `gpt-6-astra` with `FAST_MODE=true`.
 | `GITHUB_TOKEN` | required | GitHub credential, supplied as an environment variable |
 | `TARGET_BRANCHES` | `main` | Comma-separated base branches; only non-draft PRs into these are reviewed |
 | `STATUS_CONTEXT` | required | Commit-status check name; the agent appends `/pr-<number>` |
-| `MAX_CONCURRENCY` | `1` | Reviews run in parallel, one Codex sign-in each |
+| `MAX_CONCURRENCY` | `1` | Reviews run in parallel; Codex needs one sign-in per slot, Claude Code shares one credential |
 | `MAX_ATTEMPTS` | `3` | Attempts per head commit before the failure becomes terminal |
 | `POLL_SECONDS` | `15` | Discovery interval and minimum delivery-retry delay; integer ≥ 15 |
 | `RUN_EXISTING` | `false` | Also review PRs already open on the first scan |
@@ -240,8 +278,8 @@ example explicitly select `gpt-6-astra` with `FAST_MODE=true`.
 | `FAST_MODE` | `false` | Codex only: `true` requests the Fast tier (more ChatGPT credits, if available for the model) |
 | `MAX_BUDGET_USD` | none | Claude Code only: hard spend cap per review, passed to `--max-budget-usd` |
 | `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` | none | Claude Code credential: a subscription token from `claude setup-token`, or an API key (API billing) |
-| `TASK_TIMEOUT_SECONDS` | `1800` | Limit for one Codex run; the whole process group is killed on expiry |
-| `SANDBOX` | `container` in the image | `container` trusts the container boundary; `read-only` / `workspace-write` use Codex's inner sandbox |
+| `TASK_TIMEOUT_SECONDS` | `1800` | Limit for one engine run; the whole process group is killed on expiry |
+| `SANDBOX` | `container` in the image | `container` trusts the container boundary; `read-only` / `workspace-write` use Codex's inner sandbox (Codex only) |
 | `ALLOW_NETWORK` | `false` | Network access for skill commands in `workspace-write` mode |
 | `DATA_DIR` | `/data` | Volume root: sign-ins, state, results, checkouts |
 | `CODEX_HOME` | `$DATA_DIR/codex` | Slot 1's Codex home; slot N uses `<CODEX_HOME>-N` |
@@ -253,7 +291,7 @@ example explicitly select `gpt-6-astra` with `FAST_MODE=true`.
 | `INSTRUCTIONS` / `INSTRUCTIONS_FILE` | none | Task mode: free-form prompt instead of a skill |
 
 Credentials are read at startup; restart after rotating them. The image runs as the non-root `node`
-user and pins its Node base image by digest and the Codex CLI by version.
+user and pins its Node base image by digest and both engine CLIs by version.
 
 ## The skill contract
 
@@ -299,26 +337,27 @@ below this limit.
   writes are serialized; a PR never has two reviews in flight, so a new head on an active PR waits.
 - **Status delivery** posts directly to GitHub. Retrying after a lost response may add an identical
   entry to the commit's status history. Review delivery still checks its marker to avoid duplicate reviews.
-- **Codex usage limit.** When Codex exits with "You've hit your usage limit", the run is not counted
+- **Engine usage limit.** When Codex prints "You've hit your usage limit", or Claude Code returns a
+  429 / usage, weekly, rate or spend limit error, the run is not counted
   against `MAX_ATTEMPTS`: the PR's status says the limit was reached, every slot pauses for 15
   minutes, and the same attempt is retried when the pause ends. Nothing is escalated to an operator
   for a limit that resets on its own.
 - **Healthcheck** (`node /app/agent.mjs healthcheck`) is a liveness check: the discovery loop ticked
   within `max(2 min, 3 × POLL_SECONDS)`. A failing GitHub scan logs `Poll failed` but is not
   "unhealthy", because a restart would not fix it.
-- **Shutdown** on `SIGTERM` aborts GitHub calls, signals every Codex process group, escalates to
+- **Shutdown** on `SIGTERM` aborts GitHub calls, signals every engine process group, escalates to
   `SIGKILL` after five seconds, and marks interrupted runs for immediate retry without spending an
   attempt. Allow at least 15 seconds for graceful shutdown.
 - **Storage:** `codex[-N]/` holds sign-ins, `runs/` saved results, `prs-*.json` watcher state, and
   `agent.lock` the single-owner lock. Each review uses temporary checkouts under `workspaces/`;
   both snapshots and their Git history are removed after success or failure. Startup clears any
   checkouts left by a crash. Saved results have no automatic expiry. Allow space for
-  `MAX_CONCURRENCY × (repository history + two working trees)`, plus saved results and Codex data.
+  `MAX_CONCURRENCY × (repository history + two working trees)`, plus saved results and engine data.
 
 ## Security notes
 
 The skill is loaded from the merge base. Skill files and any symlink targets are trusted; the runner
-does not scan or restrict symlinks. Codex workers do not receive the GitHub token; only the wrapper
+does not scan or restrict symlinks. Engine workers do not receive the GitHub token; only the wrapper
 fetches and publishes. Review bodies, saved results, and logs redact the exact `GITHUB_TOKEN` value;
 other credentials and encoded tokens are not redacted. The default `SANDBOX=container` trusts the
 container as the boundary: skill commands run as the same user as the wrapper, with the volume and
@@ -331,11 +370,11 @@ publisher and its credentials.
 | File | What it is |
 |---|---|
 | [`agent.mjs`](agent.mjs) | The runner. Everything described above |
-| [`Dockerfile`](Dockerfile) | Node + Git + Codex CLI, non-root, `tini` + `flock` entrypoint |
+| [`Dockerfile`](Dockerfile) | Node + Git + the Codex and Claude Code CLIs, non-root, `tini` + `flock` entrypoint |
 | [`agent.env.example`](agent.env.example) | Commented configuration template |
 | [`render.yaml`](render.yaml) | Deploy to Render blueprint |
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Runs tests and builds the Docker image locally in CI; does not publish or deploy |
-| `*.test.mjs` | Tests: local Git fixtures, a fake Codex, a mocked GitHub API. No network, no credentials |
+| `*.test.mjs` | Tests: local Git fixtures, fake engine binaries, a mocked GitHub API. No network, no credentials |
 
 ## Tests
 
@@ -349,6 +388,7 @@ crash recovery, state validation, and first-start sign-in from the logs. They us
 directories and mocked services; no network or credentials are needed.
 
 References: [Codex documentation](https://learn.chatgpt.com/docs),
+[Claude Code documentation](https://code.claude.com/docs),
 [skills](https://learn.chatgpt.com/docs/build-skills),
 [GitHub reviews API](https://docs.github.com/en/rest/pulls/reviews),
 [GitHub commit statuses](https://docs.github.com/en/rest/commits/statuses).
