@@ -1,5 +1,6 @@
 # Render blueprint: a Docker background worker with a persistent disk at /data.
-# Render builds from this repository; GitHub Actions only runs tests and checks the Docker build.
+# Render builds from this repository on every push to main; GitHub Actions only runs tests and
+# checks the Docker build.
 # The disk pins the service to one instance, which is the single-owner rule the agent needs.
 services:
   - type: worker
