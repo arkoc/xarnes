@@ -32,30 +32,11 @@ Click **Deploy to Render** and provide the five required environment values:
 | `STATUS_CONTEXT` | Review/check name, for example `security-review`. GitHub displays `security-review/pr-123` for PR #123 |
 | `MAX_CONCURRENCY` | `1` to start. With the Codex engine each extra slot needs its own sign-in on this service's disk, so it is set per service and never overwritten by a Blueprint sync |
 
-All optional watcher settings are declared in [render.yaml](render.yaml) and applied automatically.
-Open your service's **Environment** page to see all 20 settings, including these defaults:
-
-| Optional setting | Render default |
-|---|---|
-| `TARGET_BRANCHES` | `main` |
-| `MAX_ATTEMPTS` | `3` |
-| `POLL_SECONDS` | `15` |
-| `RUN_EXISTING` | `false` |
-| `WATCH_UPDATES` | `true` |
-| `ENGINE` | `codex` |
-| `MODEL` | `gpt-6-sol` |
-| `FAST_MODE` | `false` |
-| `TASK_TIMEOUT_SECONDS` | `1800` |
-| `SANDBOX` | `container` |
-| `ALLOW_NETWORK` | `false` |
-| `DATA_DIR` | `/data` |
-| `CODEX_HOME` | `/data/codex` |
-| `CLAUDE_CONFIG_DIR` | `/data/claude` |
-| `CODEX_BIN` | `codex` |
-
-Render's creation form prompts only for the five required values. To change optional settings
-permanently, edit your fork's `render.yaml`: a later Blueprint sync can overwrite changes made on
-the Environment page. Settings used only by local task mode are listed under Configuration below.
+Those five are the only variables the Blueprint defines. Everything else — engine, model, branches,
+timeouts, paths — starts from the runner's defaults listed under [Configuration](#configuration) and
+is changed on the service's **Environment** page. A Blueprint sync only re-applies variables that
+`render.yaml` mentions, so settings you change in the dashboard survive every sync. Settings used
+only by local task mode are also listed under Configuration.
 
 The default engine, Codex, uses your ChatGPT account: on first start, follow the sign-in link and
 code in the logs for each configured slot. Sign-ins run one at a time; polling starts after all slots
@@ -258,8 +239,8 @@ Codex sign-ins stay on the disk untouched while Claude Code is in use; if one ex
 ## Configuration
 
 Everything is an environment variable. `agent.env.example` is a commented starting point.
-The table lists the runner's defaults when variables are absent. The Render blueprint and the local
-example explicitly select `MODEL=gpt-6-sol`; every other blueprint value equals the runner default.
+The table lists the runner's defaults when variables are absent. The Render blueprint sets none of
+them; the local `agent.env.example` explicitly selects `MODEL=gpt-6-sol`.
 
 | Variable | Default | Purpose |
 |---|---|---|

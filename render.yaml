@@ -12,7 +12,10 @@ services:
       mountPath: /data
       sizeGB: 1
     envVars:
-      # Required: Render prompts for these when creating the Blueprint.
+      # The Blueprint sets only what a deployment must know; Render prompts for each of these once.
+      # Every other setting (engine, model, branches, timeouts, ...) starts from the runner's defaults
+      # and is changed on the service's Environment page. A Blueprint sync never touches variables
+      # that this file does not mention, so those choices survive syncs.
       - key: GITHUB_REPO
         sync: false
       - key: SKILL
@@ -21,44 +24,6 @@ services:
         sync: false
       - key: STATUS_CONTEXT
         sync: false
-      # Per-instance: each extra slot needs its own Codex sign-in on this service's disk, so a
-      # blueprint sync must never change it. Start with 1; raise it after signing in the extra slots.
+      # Per service: each extra slot needs its own Codex sign-in on this service's disk.
       - key: MAX_CONCURRENCY
         sync: false
-
-      # Optional watcher settings: applied automatically and shown on the
-      # service's Environment page. MODEL matches agent.env.example; the other values are
-      # the runner's own defaults. A Blueprint sync re-applies every value here, so change a
-      # service's engine, model or branches in your fork's render.yaml rather than only in the dashboard.
-      - key: TARGET_BRANCHES
-        value: main
-      - key: MAX_ATTEMPTS
-        value: "3"
-      - key: POLL_SECONDS
-        value: "15"
-      - key: RUN_EXISTING
-        value: "false"
-      - key: WATCH_UPDATES
-        value: "true"
-      - key: ENGINE
-        value: codex
-      - key: MODEL
-        value: gpt-6-sol
-      - key: FAST_MODE
-        value: "false"
-      - key: TASK_TIMEOUT_SECONDS
-        value: "1800"
-
-      # Advanced watcher settings. Keep persistent paths on the /data disk.
-      - key: SANDBOX
-        value: container
-      - key: ALLOW_NETWORK
-        value: "false"
-      - key: DATA_DIR
-        value: /data
-      - key: CODEX_HOME
-        value: /data/codex
-      - key: CLAUDE_CONFIG_DIR
-        value: /data/claude
-      - key: CODEX_BIN
-        value: codex
