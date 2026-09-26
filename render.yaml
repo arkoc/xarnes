@@ -23,3 +23,6 @@ services:
         sync: false
       - key: GITHUB_TOKEN
         sync: false
+      # Equal to the runner default; kept so a sync always has a managed value to reconcile.
+      - key: WATCH_UPDATES
+        value: "true"
