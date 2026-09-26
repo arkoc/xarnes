@@ -13,17 +13,12 @@ services:
       sizeGB: 1
     envVars:
       # The Blueprint sets only what a deployment must know; Render prompts for each of these once.
-      # Every other setting (engine, model, branches, timeouts, ...) starts from the runner's defaults
-      # and is changed on the service's Environment page. A Blueprint sync never touches variables
-      # that this file does not mention, so those choices survive syncs.
+      # Every other setting (engine, model, branches, concurrency, check name, timeouts, ...) starts
+      # from the runner's defaults and is changed on the service's Environment page. A Blueprint
+      # sync never touches variables that this file does not mention, so those choices survive syncs.
       - key: GITHUB_REPO
         sync: false
       - key: SKILL
         sync: false
       - key: GITHUB_TOKEN
-        sync: false
-      - key: STATUS_CONTEXT
-        sync: false
-      # Per service: each extra slot needs its own Codex sign-in on this service's disk.
-      - key: MAX_CONCURRENCY
         sync: false

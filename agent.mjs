@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile, rename, mkdtemp, rm } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
@@ -384,8 +384,9 @@ async function main() {
   if (!targets.size) throw new Error('TARGET_BRANCHES must list at least one branch');
   const maxAttempts = Number(env.MAX_ATTEMPTS ?? 3);
   if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) throw new Error('MAX_ATTEMPTS must be a positive safe integer');
-  // Commit statuses are named <STATUS_CONTEXT>/pr-<number>; GitHub caps the whole name at 255 characters.
-  const statusContext = (env.STATUS_CONTEXT ?? '').trim().replace(/\/+$/, '');
+  // Commit statuses are named <STATUS_CONTEXT>/pr-<number>, defaulting to the skill's directory name;
+  // GitHub caps the whole name at 255 characters.
+  const statusContext = (env.STATUS_CONTEXT ?? basename(selected)).trim().replace(/\/+$/, '');
   if (!statusContext || statusContext.length > 200) throw new Error('Set STATUS_CONTEXT to a check name of at most 200 characters, e.g. security-review');
   const request = (path, options) => github(githubToken, path, options);
   const statePath = join(data, `prs-${repo.replace('/', '--')}.json`);

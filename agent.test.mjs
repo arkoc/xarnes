@@ -129,10 +129,14 @@ test('healthcheck needs a recent discovery-loop heartbeat and no credentials', a
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test('watcher requires a check name and validates configuration before requesting sign-in', async () => {
+test('watcher validates an explicit check name before requesting sign-in, and defaults it to the skill name', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'xarnes-config-test-'));
   try {
-    for (const context of [undefined, '', '   ', '/', 'x'.repeat(201)]) {
+    // No STATUS_CONTEXT: validation passes with the skill's directory name and the run proceeds to sign-in.
+    const defaulted = spawnSync(process.execPath, [fileURLToPath(new URL('./agent.mjs', import.meta.url)), 'watch'], { env: { PATH: process.env.PATH, DATA_DIR: dir, CODEX_BIN: join(dir, 'must-not-run'), GITHUB_REPO: 'example/repo', GITHUB_TOKEN: 'fixture-github', SKILL: 'skills/review' }, encoding: 'utf8', timeout: 5000 });
+    assert.doesNotMatch(defaulted.stderr, /Set STATUS_CONTEXT/);
+    assert.match(defaulted.stdout, /needs a ChatGPT sign-in/);
+    for (const context of ['', '   ', '/', 'x'.repeat(201)]) {
       const env = { PATH: process.env.PATH, DATA_DIR: dir, CODEX_BIN: join(dir, 'must-not-run'),
         GITHUB_REPO: 'example/repo', GITHUB_TOKEN: 'fixture-github', SKILL: 'skills/review' };
       if (context !== undefined) env.STATUS_CONTEXT = context;

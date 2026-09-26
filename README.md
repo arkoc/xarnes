@@ -22,18 +22,16 @@ PR. Your skill chooses the checks, verdict, and complete review body. The runner
 
 ## Deploy to Render
 
-Click **Deploy to Render** and provide the five required environment values:
+Click **Deploy to Render** and provide the three required environment values:
 
 | Field | Value |
 |---|---|
 | `GITHUB_REPO` | `owner/name` of the repository to watch |
 | `SKILL` | Directory in that repository holding `SKILL.md`, for example `skills/review` |
 | `GITHUB_TOKEN` | Fine-grained token with **Contents: read**, **Pull requests: write**, **Commit statuses: write** |
-| `STATUS_CONTEXT` | Review/check name, for example `security-review`. GitHub displays `security-review/pr-123` for PR #123 |
-| `MAX_CONCURRENCY` | `1` to start. With the Codex engine each extra slot needs its own sign-in on this service's disk, so it is set per service and never overwritten by a Blueprint sync |
 
-Those five are the only variables the Blueprint defines. Everything else — engine, model, branches,
-timeouts, paths — starts from the runner's defaults listed under [Configuration](#configuration) and
+Those three are the only variables the Blueprint defines. Everything else — engine, model, branches,
+concurrency, the check name, timeouts, paths — starts from the runner's defaults listed under [Configuration](#configuration) and
 is changed on the service's **Environment** page. A Blueprint sync only re-applies variables that
 `render.yaml` mentions, so settings you change in the dashboard survive every sync. Settings used
 only by local task mode are also listed under Configuration.
@@ -146,7 +144,7 @@ its owner's own PRs, so use a dedicated reviewer identity.
 
 ```sh
 docker build -t xarnes-agent:local .
-cp agent.env.example agent.env   # set GITHUB_REPO, SKILL, GITHUB_TOKEN, STATUS_CONTEXT
+cp agent.env.example agent.env   # set GITHUB_REPO, SKILL, GITHUB_TOKEN
 chmod 600 agent.env
 ```
 
@@ -248,7 +246,7 @@ them; the local `agent.env.example` explicitly selects `MODEL=gpt-6-sol`.
 | `SKILL` | required | Skill directory in that repository; a bare name means `skills/<name>` |
 | `GITHUB_TOKEN` | required | GitHub credential, supplied as an environment variable |
 | `TARGET_BRANCHES` | `main` | Comma-separated base branches; only non-draft PRs into these are reviewed |
-| `STATUS_CONTEXT` | required | Commit-status check name; the agent appends `/pr-<number>` |
+| `STATUS_CONTEXT` | skill directory name | Commit-status check name; the agent appends `/pr-<number>`. `skills/security-review` yields `security-review/pr-123` |
 | `MAX_CONCURRENCY` | `1` | Reviews run in parallel; Codex needs one sign-in per slot, Claude Code shares one credential |
 | `MAX_ATTEMPTS` | `3` | Attempts per head commit before the failure becomes terminal |
 | `POLL_SECONDS` | `15` | Discovery interval and minimum delivery-retry delay; integer ≥ 15 |
