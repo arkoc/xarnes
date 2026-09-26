@@ -598,3 +598,76 @@ globalThis.fetch=async(url,options={})=>{
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('ENGINE=claude reviews through claude -p with the isolation flags, one shared config dir, and pauses on a usage limit', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'standalone-claude-test-'));
+  let w;
+  try {
+    const fixture = await fixtureRepository(dir);
+    const bin = join(dir, 'bin'); await mkdir(bin);
+    await fakeGit(bin);
+    // Fake `claude`: checks the flags the runner relies on, then answers on stdout as JSON like the real CLI.
+    await writeFile(join(bin, 'claude'), `#!/usr/bin/env node
+import {appendFileSync,existsSync} from 'node:fs';
+import {resolve} from 'node:path';
+const args=process.argv.slice(2); let input=''; for await(const p of process.stdin) input+=p;
+const need=['-p','--output-format','json','--permission-mode','bypassPermissions','--setting-sources','user','--add-dir'];
+const missing=need.filter(f=>!args.includes(f)); if(missing.length){console.error('missing flags '+missing); process.exit(9);}
+const added=args[args.indexOf('--add-dir')+1];
+if(resolve(added)===process.cwd()){console.error('must start outside the checkout'); process.exit(9);}
+if(process.env.GITHUB_TOKEN||process.env.GH_TOKEN){console.error('token leaked into the engine'); process.exit(9);}
+if(!process.env.CLAUDE_CONFIG_DIR){console.error('no CLAUDE_CONFIG_DIR'); process.exit(9);}
+const number=input.match(/PR number: (\\d+)/)[1];
+appendFileSync(process.env.MOCK_RUNS,JSON.stringify({number,home:process.env.CLAUDE_CONFIG_DIR,model:args[args.indexOf('--model')+1]})+'\\n');
+if(existsSync(process.env.DATA_DIR+'/limit')){
+  console.log(JSON.stringify({type:'result',is_error:true,api_error_status:429,result:'You have reached your weekly usage limit. Your limit will reset at 10:00 PM.'}));
+  process.exit(1);
+}
+console.log(JSON.stringify({type:'result',is_error:false,num_turns:3,total_cost_usd:0.42,result:JSON.stringify({verdict:'pass',body:'Reviewed by fake claude for PR '+number})}));
+`, { mode: 0o700 });
+    const loader = join(dir, 'mock.mjs');
+    await writeFile(loader, `const make=number=>({number,draft:false,head:{sha:process.env.FIXTURE_HEAD},base:{ref:'main',sha:process.env.FIXTURE_TARGET},state:'open',merged:false,html_url:'u',title:'t',body:''});
+const prs=[make(1),make(2)];
+globalThis.fetch=async(url,options={})=>{
+ const path=new URL(url).pathname, method=options.method??'GET';
+ if(path.includes('/commits/')) return new Response('[]');
+ if(path.includes('/statuses/')) return new Response(JSON.stringify({id:99,...JSON.parse(options.body)}));
+ if(path==='/repos/example/repo/pulls') return new Response(JSON.stringify(prs));
+ const one=path.match(/^\\/repos\\/example\\/repo\\/pulls\\/(\\d+)(\\/reviews)?$/);
+ if(one && !one[2]) return new Response(JSON.stringify(prs[Number(one[1])-1]));
+ if(one && method==='GET') return new Response('[]');
+ if(one) { const body=JSON.parse(options.body); return new Response(JSON.stringify({id:Number(one[1]),state:'APPROVED',commit_id:body.commit_id,html_url:'u'})); }
+ throw Error('Unexpected request '+path);
+};`);
+    const runs = join(dir, 'runs-log'), home = join(dir, 'claude-home');
+    const env = { PATH: `${bin}:${process.env.PATH}`, HOME: dir, ENGINE: 'claude', CLAUDE_CONFIG_DIR: home, MODEL: 'claude-opus-5-5', DATA_DIR: dir, SKILL: 'skills/review', GITHUB_REPO: 'example/repo', GITHUB_TOKEN: 'fixture-github', STATUS_CONTEXT: 'review', RUN_EXISTING: 'true', MAX_CONCURRENCY: '2', MOCK_RUNS: runs, REAL_GIT: realGit, FIXTURE_REPO: fixture.repo, FIXTURE_HEAD: fixture.head, FIXTURE_TARGET: fixture.target };
+    // Without a token or saved credential the watcher refuses to start and says what to set.
+    const refused = spawnSync(process.execPath, ['--import', loader, agent, 'watch'], { env, encoding: 'utf8', timeout: 20000 });
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /CLAUDE_CODE_OAUTH_TOKEN/);
+    const statePath = join(dir, 'prs-example--repo.json');
+    w = watcher(loader, { ...env, CLAUDE_CODE_OAUTH_TOKEN: 'fixture-claude' });
+    w.start();
+    await w.until(async () => { const prs = JSON.parse(await readFile(statePath, 'utf8')).prs; return [1, 2].every(n => prs[n]?.status === 'succeeded'); }, 'both PRs reviewed by the claude engine');
+    await w.stop();
+    const events = (await readFile(runs, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    assert.deepEqual(events.map(e => e.number).sort(), ['1', '2']);
+    assert.deepEqual(new Set(events.map(e => e.home)), new Set([home]), 'every slot shares the one Claude config dir');
+    assert.ok(events.every(e => e.model === 'claude-opus-5-5'));
+    assert.doesNotMatch(w.logs(), /needs an? \w+ sign-in/, 'a token means no sign-in step');
+    assert.match(w.logs(), /up to 2 PRs at a time/);
+    // A usage-limit reply is a pause, not a failed attempt.
+    await writeFile(join(dir, 'limit'), 'yes');
+    const state = JSON.parse(await readFile(statePath, 'utf8')); delete state.prs[1]; await writeFile(statePath, JSON.stringify(state));
+    w.start();
+    await w.until(async () => JSON.parse(await readFile(statePath, 'utf8')).prs[1]?.status === 'limited', 'limit recorded');
+    await w.stop();
+    const limited = JSON.parse(await readFile(statePath, 'utf8')).prs[1];
+    assert.equal(limited.attempts, 0);
+    assert.match(limited.error, /weekly usage limit/);
+    assert.match(w.logs(), /reviews paused until/);
+  } finally {
+    await w?.stop('SIGKILL');
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -11,7 +11,7 @@ PR. Your skill chooses the checks, verdict, and complete review body. The runner
 
 ## Why xarnes-agent
 
-- **Easy to verify.** The whole runner is one [~500-line file](agent.mjs) using only Node.js built-ins.
+- **Easy to verify.** The whole runner is one [~600-line file](agent.mjs) using only Node.js built-ins.
   Read it end to end to see how credentials, reviews, retries, and delivery work.
 - **Host it yourself.** Deploy to your Render account with one click, or run Docker on your own
   infrastructure. Your persistent volume holds the sign-ins, queue, and results.
@@ -42,6 +42,7 @@ Open your service's **Environment** page to see all 18 settings, including these
 | `POLL_SECONDS` | `15` |
 | `RUN_EXISTING` | `false` |
 | `WATCH_UPDATES` | `true` |
+| `ENGINE` | `codex` |
 | `MODEL` | `gpt-6-sol` |
 | `FAST_MODE` | `false` |
 | `TASK_TIMEOUT_SECONDS` | `1800` |
@@ -49,6 +50,7 @@ Open your service's **Environment** page to see all 18 settings, including these
 | `ALLOW_NETWORK` | `false` |
 | `DATA_DIR` | `/data` |
 | `CODEX_HOME` | `/data/codex` |
+| `CLAUDE_CONFIG_DIR` | `/data/claude` |
 | `CODEX_BIN` | `codex` |
 
 Render's creation form prompts only for the five required values. To change optional settings
@@ -197,6 +199,24 @@ Task mode runs the explicitly configured `SKILL`. For a free-form task, set `INS
 `INSTRUCTIONS_FILE` (see [instructions.example.md](instructions.example.md)) and leave `SKILL` unset.
 Any edits remain in the mounted workspace.
 
+## Engines
+
+`ENGINE` selects which CLI performs the review. Everything else — discovery, the merge-base skill,
+validation, exactly-once delivery, statuses, retries, and the usage-limit pause — is identical.
+
+| | `codex` (default) | `claude` |
+|---|---|---|
+| Runs | `codex exec` | `claude -p --output-format json` |
+| Sign-in | ChatGPT device sign-in, one per slot, started from the logs on first run | `CLAUDE_CODE_OAUTH_TOKEN` (one-year subscription token from `claude setup-token` on a workstation) or `ANTHROPIC_API_KEY`; there is no device flow |
+| Slots | each slot has its own Codex home and sign-in | one credential and one `CLAUDE_CONFIG_DIR` serve every slot; concurrency is bounded by the plan's rate limit |
+| Keeping the PR's config out | `--ignore-user-config --ignore-rules`, no `AGENTS.md`, cwd outside both checkouts | `--setting-sources user`, `--add-dir <checkout>`, cwd outside both checkouts; a `CLAUDE.md` inside an added directory is not loaded |
+| Sandbox | container boundary, or Codex's inner sandbox via `SANDBOX` | container boundary (`--permission-mode bypassPermissions`); `MAX_BUDGET_USD` caps spend per review |
+| Usage limit | *"You've hit your usage limit"* | `is_error` with *usage limit*, *weekly limit*, *rate limit*, *Too Many Requests* (429), *spend limit* or *credit balance* in `result` |
+
+Both engines receive the same prompt and must return the same JSON verdict, so a skill written for
+one runs unchanged on the other. Model quality is a separate question; compare on a test PR before
+switching a production repository.
+
 ## Configuration
 
 Everything is an environment variable. `agent.env.example` is a commented starting point.
@@ -215,14 +235,19 @@ example explicitly select `gpt-6-astra` with `FAST_MODE=true`.
 | `POLL_SECONDS` | `15` | Discovery interval and minimum delivery-retry delay; integer ≥ 15 |
 | `RUN_EXISTING` | `false` | Also review PRs already open on the first scan |
 | `WATCH_UPDATES` | `true` | Review new head commits on already-reviewed PRs |
-| `MODEL` | Codex default | Codex model override |
-| `FAST_MODE` | `false` | `true` requests Codex's Fast tier (more ChatGPT credits, if available for the model) |
+| `ENGINE` | `codex` | Review engine: `codex` or `claude` (see Engines) |
+| `MODEL` | engine default | Model override, passed to the engine's `--model` |
+| `FAST_MODE` | `false` | Codex only: `true` requests the Fast tier (more ChatGPT credits, if available for the model) |
+| `MAX_BUDGET_USD` | none | Claude Code only: hard spend cap per review, passed to `--max-budget-usd` |
+| `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` | none | Claude Code credential: a subscription token from `claude setup-token`, or an API key (API billing) |
 | `TASK_TIMEOUT_SECONDS` | `1800` | Limit for one Codex run; the whole process group is killed on expiry |
 | `SANDBOX` | `container` in the image | `container` trusts the container boundary; `read-only` / `workspace-write` use Codex's inner sandbox |
 | `ALLOW_NETWORK` | `false` | Network access for skill commands in `workspace-write` mode |
 | `DATA_DIR` | `/data` | Volume root: sign-ins, state, results, checkouts |
 | `CODEX_HOME` | `$DATA_DIR/codex` | Slot 1's Codex home; slot N uses `<CODEX_HOME>-N` |
 | `CODEX_BIN` | `codex` | Codex executable |
+| `CLAUDE_CONFIG_DIR` | `$DATA_DIR/claude` | Claude Code home, shared by every slot |
+| `CLAUDE_BIN` | `claude` | Claude Code executable |
 | `WORKSPACE` | `/workspace` | Task mode: the checkout to run against |
 | `SKILLS_DIR` | `$WORKSPACE/skills` | Task mode: where bare skill names are resolved |
 | `INSTRUCTIONS` / `INSTRUCTIONS_FILE` | none | Task mode: free-form prompt instead of a skill |

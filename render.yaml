@@ -39,6 +39,8 @@ services:
         value: "false"
       - key: WATCH_UPDATES
         value: "true"
+      - key: ENGINE
+        value: codex
       - key: MODEL
         value: gpt-6-sol
       - key: FAST_MODE
@@ -55,5 +57,7 @@ services:
         value: /data
       - key: CODEX_HOME
         value: /data/codex
+      - key: CLAUDE_CONFIG_DIR
+        value: /data/claude
       - key: CODEX_BIN
         value: codex

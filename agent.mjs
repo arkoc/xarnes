@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
 const env = process.env;
-const codex = env.CODEX_BIN ?? 'codex';
+const engineName = env.ENGINE ?? 'codex';
 const children = new Set();
 let stopping = false;
 const shutdown = new AbortController();
@@ -50,7 +50,7 @@ function command(bin, args, options = {}) {
     proc.on('close', (code) => {
       clearTimeout(timer); children.delete(proc);
       if (code === 0) return done(stdout.trim());
-      fail(Object.assign(new Error(`${bin} ${timedOut ? 'timed out' : `exited with ${code}`}`), { detected }));
+      fail(Object.assign(new Error(`${bin} ${timedOut ? 'timed out' : `exited with ${code}`}`), { detected, stdout: stdout.trim() }));
     });
   });
 }
@@ -236,28 +236,78 @@ export async function prepareReview(workspace, baseline, target, head, selected,
   if (!(await readFile(manifest, 'utf8')).trim()) throw new Error(`Empty skill at BASE: ${skillPath}/SKILL.md`);
   return { base, manifest };
 }
-// Codex prints this and exits non-zero when the ChatGPT plan's usage window is exhausted.
-const usageLimit = /hit your usage limit/i;
 const usageLimitPause = 15 * 60_000;
+// Review engines. Each runs one prompt non-interactively and returns the assistant's final text; the
+// rest of the runner never knows which one is in use. A run that fails because the plan's usage
+// window is exhausted rejects with `detected: true` so it pauses instead of spending an attempt.
+const engines = {
+  codex: {
+    label: 'Codex',
+    account: 'ChatGPT',
+    bin: env.CODEX_BIN ?? 'codex',
+    homeVar: 'CODEX_HOME',
+    perSlotHome: true, // one ChatGPT sign-in per slot: slot 1 keeps CODEX_HOME, slot N uses CODEX_HOME-N
+    signedIn: home => readFile(join(home, 'auth.json')).then(() => true, () => false),
+    // Device sign-in works without a terminal: the link and code go to the logs.
+    signIn: home => command(engines.codex.bin, ['login', '--device-auth', '-c', 'cli_auth_credentials_store="file"'], { interactive: true, env: { ...env, CODEX_HOME: home } }),
+    headlessSignIn: true,
+    async run(instructions, workspace, output, mode, childEnv, label) {
+      const sandbox = env.SANDBOX ?? (mode === 'watch' ? 'read-only' : 'workspace-write');
+      if (!['container', 'read-only', 'workspace-write'].includes(sandbox)) throw new Error('SANDBOX must be container, read-only or workspace-write');
+      const args = ['exec', '--skip-git-repo-check', '--ephemeral', '--color', 'never', '--sandbox', sandbox === 'container' ? 'danger-full-access' : sandbox,
+        '-c', 'approval_policy="never"', '-c', 'cli_auth_credentials_store="file"',
+        '-C', mode === 'watch' ? dirname(workspace) : workspace, '-o', output];
+      if (env.MODEL) args.push('--model', env.MODEL);
+      if (env.FAST_MODE === 'true') args.push('-c', 'service_tier="fast"', '-c', 'features.fast_mode=true');
+      if (env.ALLOW_NETWORK === 'true') args.push('-c', 'sandbox_workspace_write.network_access=true');
+      // Start outside both Git snapshots so PR-local configuration/skills are not auto-loaded.
+      if (mode === 'watch') args.push('--ignore-user-config', '--ignore-rules', '-c', 'project_doc_max_bytes=0');
+      args.push('-');
+      // Codex prints this and exits non-zero when the ChatGPT plan's usage window is exhausted.
+      await command(this.bin, args, { input: instructions, timeout: Number(env.TASK_TIMEOUT_SECONDS ?? 1800) * 1000, env: childEnv, label, detect: /hit your usage limit/i });
+      return readFile(output, 'utf8');
+    },
+  },
+  claude: {
+    label: 'Claude Code',
+    account: 'Anthropic',
+    bin: env.CLAUDE_BIN ?? 'claude',
+    homeVar: 'CLAUDE_CONFIG_DIR',
+    perSlotHome: false, // one credential serves every concurrent process; a second config dir would not be signed in
+    signedIn: home => Boolean(env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_API_KEY) || readFile(join(home, '.credentials.json')).then(() => true, () => false),
+    // No device flow: the browser sign-in needs a terminal to paste the code into, so headless deployments use a token.
+    signIn: home => command(engines.claude.bin, ['auth', 'login'], { interactive: true, env: { ...env, CLAUDE_CONFIG_DIR: home } }),
+    headlessSignIn: false,
+    signInHelp: 'Claude Code cannot sign in without a terminal. Set CLAUDE_CODE_OAUTH_TOKEN (create it once with "claude setup-token" on a workstation) or ANTHROPIC_API_KEY, or run this image with "login" in a terminal.',
+    async run(instructions, workspace, output, mode, childEnv, label) {
+      // Start outside both Git snapshots; --setting-sources user keeps the PR's CLAUDE.md and .claude/ out of the session.
+      const args = ['-p', '--output-format', 'json', '--permission-mode', 'bypassPermissions', '--setting-sources', 'user', '--disable-slash-commands', '--add-dir', workspace];
+      if (env.MODEL) args.push('--model', env.MODEL);
+      if (env.MAX_BUDGET_USD) args.push('--max-budget-usd', env.MAX_BUDGET_USD);
+      const options = { cwd: mode === 'watch' ? dirname(workspace) : workspace, input: instructions, timeout: Number(env.TASK_TIMEOUT_SECONDS ?? 1800) * 1000, env: childEnv, label, capture: true };
+      // The final message is the `result` of the JSON document on stdout, including error cases.
+      const reply = raw => { try { return JSON.parse(raw); } catch { return {}; } };
+      let body;
+      try { body = reply(await command(this.bin, args, options)); }
+      catch (error) {
+        body = reply(error.stdout ?? '');
+        if (!hasText(body.result)) throw error;
+      }
+      if (body.is_error || !hasText(body.result)) {
+        const message = hasText(body.result) ? body.result : 'Claude Code returned no result';
+        const detected = body.api_error_status === 429 || /usage limit|weekly limit|rate limit|too many requests|spend limit|credit (balance|limit)/i.test(message);
+        throw Object.assign(new Error(`${this.bin}: ${message}`), { detected });
+      }
+      return body.result;
+    },
+  },
+};
 async function execute(instructions, workspace, output, mode, home, label) {
-  const sandbox = env.SANDBOX ?? (mode === 'watch' ? 'read-only' : 'workspace-write');
-  if (!['container', 'read-only', 'workspace-write'].includes(sandbox)) throw new Error('SANDBOX must be container, read-only or workspace-write');
-  const args = ['exec', '--skip-git-repo-check', '--ephemeral', '--color', 'never', '--sandbox', sandbox === 'container' ? 'danger-full-access' : sandbox,
-    '-c', 'approval_policy="never"', '-c', 'cli_auth_credentials_store="file"',
-    '-C', mode === 'watch' ? dirname(workspace) : workspace, '-o', output];
-  if (env.MODEL) args.push('--model', env.MODEL);
-  if (env.FAST_MODE === 'true') args.push('-c', 'service_tier="fast"', '-c', 'features.fast_mode=true');
-  if (env.ALLOW_NETWORK === 'true') args.push('-c', 'sandbox_workspace_write.network_access=true');
-  const childEnv = { ...env, CODEX_HOME: home };
-  if (mode === 'watch') {
-    // Start outside both Git snapshots so PR-local configuration/skills are not auto-loaded.
-    args.push('--ignore-user-config', '--ignore-rules', '-c', 'project_doc_max_bytes=0');
-    // Only the wrapper fetches from GitHub and publishes reviews/statuses.
-    for (const key of ['GITHUB_TOKEN', 'GITHUB_TOKEN_FILE', 'GH_TOKEN', 'GH_TOKEN_FILE', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) delete childEnv[key];
-  }
-  args.push('-');
-  await command(codex, args, { input: instructions, timeout: Number(env.TASK_TIMEOUT_SECONDS ?? 1800) * 1000, env: childEnv, label, detect: usageLimit });
-  const result = clean(await readFile(output, 'utf8'));
+  const engine = engines[engineName];
+  const childEnv = { ...env, [engine.homeVar]: home };
+  // Only the wrapper fetches from GitHub and publishes reviews/statuses.
+  if (mode === 'watch') for (const key of ['GITHUB_TOKEN', 'GITHUB_TOKEN_FILE', 'GH_TOKEN', 'GH_TOKEN_FILE', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN']) delete childEnv[key];
+  const result = clean(await engine.run(instructions, workspace, output, mode, childEnv, label));
   await writeFile(output, result, { mode: 0o600, flush: true });
   return result;
 }
@@ -279,27 +329,30 @@ async function main() {
     if (!(age >= 0 && age < limit)) throw new Error('The discovery loop has not run recently');
     return;
   }
-  env.CODEX_HOME ??= join(data, 'codex');
+  const engine = engines[engineName];
+  if (!engine) throw new Error(`ENGINE must be ${Object.keys(engines).join(' or ')}`);
+  env[engine.homeVar] ??= join(data, engineName);
   await mkdir(join(data, 'runs'), { recursive: true, mode: 0o700 });
-  // Codex uses a ChatGPT sign-in saved per slot. A slot without one signs in on the spot: the link and
-  // code go to the logs, so a fresh deployment needs a browser but never a shell.
-  // Each concurrent review runs in its own Codex instance: slot 1 keeps CODEX_HOME, slot N uses CODEX_HOME-N.
+  // Codex keeps a ChatGPT sign-in per slot and can sign in from the logs; Claude Code shares one
+  // credential across every slot and needs it supplied up front.
   const concurrency = Number(env.MAX_CONCURRENCY ?? 1);
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new Error('MAX_CONCURRENCY must be a positive integer');
-  const slotHome = slot => slot === 1 ? env.CODEX_HOME : `${env.CODEX_HOME}-${slot}`;
+  const slotHome = slot => slot === 1 || !engine.perSlotHome ? env[engine.homeVar] : `${env[engine.homeVar]}-${slot}`;
   const slots = Array.from({ length: mode === 'task' ? 1 : concurrency }, (_, index) => index + 1);
   for (const slot of slots) await mkdir(slotHome(slot), { recursive: true, mode: 0o700 });
-  const signedIn = slot => readFile(join(slotHome(slot), 'auth.json')).then(() => true, () => false);
-  async function signIn(slot) {
-    console.log(`Codex slot ${slot} of ${slots.length} needs a ChatGPT sign-in. Open the link below and enter the code.`);
-    await command(codex, ['login', '--device-auth', '-c', 'cli_auth_credentials_store="file"'], { interactive: true, env: { ...env, CODEX_HOME: slotHome(slot) } });
+  const signedIn = slot => engine.signedIn(slotHome(slot));
+  async function signIn(slot, interactive = false) {
+    if (!interactive && !engine.headlessSignIn) throw new Error(engine.signInHelp);
+    console.log(`${engine.label} slot ${slot} of ${slots.length} needs a ${engine.account} sign-in. Open the link below and enter the code.`);
+    await engine.signIn(slotHome(slot));
   }
   if (mode === 'login') {
     const requested = process.argv[3] === undefined ? undefined : Number(process.argv[3]);
     if (requested !== undefined && !slots.includes(requested)) throw new Error(`Usage: agent login [1-${concurrency}]`);
     for (const slot of requested ? [requested] : slots) {
-      if (!requested && await signedIn(slot)) { console.log(`Codex slot ${slot} is already signed in; run "login ${slot}" to sign in again.`); continue; }
-      await signIn(slot);
+      if (!requested && await signedIn(slot)) { console.log(`${engine.label} slot ${slot} is already signed in; run "login ${slot}" to sign in again.`); continue; }
+      await signIn(slot, true);
+      if (!engine.perSlotHome) break; // one sign-in covers every slot
     }
     return;
   }
